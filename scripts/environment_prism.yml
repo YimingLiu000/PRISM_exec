@@ -1,0 +1,39 @@
+# PRISM 运行环境
+# 说明：
+# 1. 这个环境只负责安装软件和 R 包，不包含大型数据库与参考索引。
+# 2. Kraken2 / BLAST / STAR / Minimap2 所需数据库仍需单独准备。
+# 3. PRISM 仓库额外要求下载 genbank/ 目录并放到 <project_root>/00script/repo 下。
+
+name: prism
+channels:
+  - bioconda
+  - conda-forge
+dependencies:
+  # 基础运行环境
+  - python=3.11
+  - bash
+  - coreutils
+  - gawk
+  - grep
+  - perl=5.32.1
+  - sed
+  - pigz=2.8
+  - unzip
+
+  # R 与 R 包
+  - r-base=4.3.3
+  - r-optparse=1.7.5
+  - bioconductor-shortread=1.60.0
+  - r-tidyverse=2.0.0
+  - r-furrr=0.3.1
+  - r-data.table=1.17.8
+  - r-vegan=2.7_1
+  - r-xgboost=1.7.6
+
+  # PRISM 依赖的外部生信工具
+  - kraken2=2.17.1
+  - minimap2=2.30
+  - star=2.7.11b
+  - blast=2.17.0
+  - seqkit=2.13.0
+  - ncbi-datasets-cli
