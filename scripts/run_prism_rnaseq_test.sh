@@ -6,14 +6,14 @@
 # 3. 输出结果到 ~/PRISM/02fastq/<sample>_prism/
 #
 # 运行前必须完成：
-# 1. conda env create -f /home/ubuntu/PRISM/00script/environment_prism.yml
+# 1. conda env create -f ${PROJECT_ROOT}/00script/environment_prism.yml
 # 2. conda activate prism
 # 3. 执行 00script 中的数据准备脚本，完成：
 #    - Kraken2 推荐数据库
 #    - BLAST core_nt
 #    - Minimap2 / STAR 宿主索引
 #    - sorted_accession_map.txt
-# 4. 将 PRISM 需要的 genbank/ 目录放到 /home/ubuntu/PRISM/repo/genbank
+# 4. 将 PRISM 需要的 genbank/ 目录放到 ${PROJECT_ROOT}/00script/repo/genbank
 #
 # 注意：
 # 1. 这个脚本默认测试样本名为 FUSCCTNBC001

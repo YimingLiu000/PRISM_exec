@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 
 # 用途：
-# 1. 下载人源参考基因组 GRCh38
-# 2. 基于该参考序列构建 Minimap2 宿主索引
-# 3. 基于该参考序列构建 STAR 宿主索引
+# 1. 基于已下载的人源参考基因组构建 Minimap2 宿主索引
+# 2. 基于已下载的人源参考基因组构建 STAR 宿主索引
 #
 # 说明：
 # 1. 这里使用 NCBI RefSeq human reference genome
 # 2. 目标是给 PRISM 的宿主去除步骤提供索引
-# 3. 这个脚本优先构建“可运行的基础索引”，不额外处理复杂注释
+# 3. 宿主参考基因组请先用 `download_prism_host_reference.sh` 下载到源数据目录
 
 set -euo pipefail
 
@@ -24,16 +23,14 @@ else
 fi
 
 THREADS=32
+HOST_SOURCE_DIR="${HOST_SOURCE_DIR:-${PROJECT_ROOT}/02ref/host_sources/GRCh38_refseq}"
 DB_ROOT="${PROJECT_ROOT}/02ref/host"
-HUMAN_ACC="GCF_000001405.40"
-PKG_ZIP="${DB_ROOT}/GRCh38_refseq.zip"
-PKG_DIR="${DB_ROOT}/GRCh38_refseq"
 MINIMAP2_DIR="${DB_ROOT}/hg38.minimap2"
 STAR_DIR="${DB_ROOT}/hg38.star"
 MINIMAP2_INDEX="${MINIMAP2_DIR}/hg38.mmi"
 
 echo "[检查] 检查依赖软件"
-for exe in datasets unzip minimap2 STAR find; do
+for exe in minimap2 STAR find; do
   if ! command -v "${exe}" >/dev/null 2>&1; then
     echo "[错误] 未找到命令: ${exe}"
     exit 1
@@ -42,23 +39,13 @@ done
 
 mkdir -p "${DB_ROOT}" "${MINIMAP2_DIR}" "${STAR_DIR}"
 
-if [[ ! -f "${PKG_ZIP}" ]]; then
-  echo "[下载] 下载 GRCh38 RefSeq 参考基因组"
-  datasets download genome accession "${HUMAN_ACC}" \
-    --filename "${PKG_ZIP}" \
-    --include genome
-else
-  echo "[跳过] 已存在下载包: ${PKG_ZIP}"
+if [[ ! -d "${HOST_SOURCE_DIR}" ]]; then
+  echo "[错误] 未找到宿主源数据目录: ${HOST_SOURCE_DIR}"
+  echo "       请先运行 download_prism_host_reference.sh，然后把源数据复制过来。"
+  exit 1
 fi
 
-if [[ ! -d "${PKG_DIR}" ]]; then
-  echo "[解压] 解压 GRCh38 数据包"
-  unzip -q "${PKG_ZIP}" -d "${PKG_DIR}"
-else
-  echo "[跳过] 已存在解压目录: ${PKG_DIR}"
-fi
-
-HUMAN_FASTA="$(find "${PKG_DIR}" -type f -name '*_genomic.fna' | head -n 1)"
+HUMAN_FASTA="$(find "${HOST_SOURCE_DIR}" -type f -name '*_genomic.fna' | head -n 1)"
 
 if [[ -z "${HUMAN_FASTA}" ]]; then
   echo "[错误] 未找到 human genomic FASTA"
@@ -91,3 +78,4 @@ echo "${MINIMAP2_INDEX}"
 echo "[完成] STAR genomeDir:"
 echo "${STAR_DIR}"
 echo "[说明] 当前 PROJECT_ROOT: ${PROJECT_ROOT}"
+echo "[说明] 宿主源数据目录: ${HOST_SOURCE_DIR}"
