@@ -19,6 +19,7 @@ fi
 
 PRISM_ROOT="${PROJECT_ROOT}/00script/repo"
 REF_ROOT="${PROJECT_ROOT}/02ref"
+HOST_SOURCE_DIR="${REF_ROOT}/host_sources/GRCh38_refseq"
 KRAKEN_SOURCE_DIR="${REF_ROOT}/kraken2_sources/prism_kraken2_recommended"
 KRAKEN_DB="${REF_ROOT}/kraken2/prism_kraken2_recommended"
 BLAST_DB="${REF_ROOT}/blast/core_nt/core_nt"
@@ -40,6 +41,7 @@ check_path() {
   fi
 }
 
+check_path "宿主源数据目录" "${HOST_SOURCE_DIR}"
 check_path "Kraken2 源数据目录" "${KRAKEN_SOURCE_DIR}"
 check_path "Kraken2 数据库目录" "${KRAKEN_DB}"
 check_path "BLAST 数据库前缀（示意检查 .ndb/.nhr）" "${BLAST_DB}.ndb"
@@ -57,4 +59,5 @@ echo "--minimap2_index ${MINIMAP2_INDEX}"
 echo "--star_genome_dir ${STAR_DIR}"
 echo "--model_org_taxids ${MODEL_TAXID_FILE}"
 echo "[说明] 当前推断的 PROJECT_ROOT: ${PROJECT_ROOT}"
+echo "[说明] 宿主源数据目录: ${HOST_SOURCE_DIR}"
 echo "[说明] Kraken 源数据目录: ${KRAKEN_SOURCE_DIR}"
