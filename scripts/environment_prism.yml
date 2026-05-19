@@ -2,10 +2,10 @@
 # 说明：
 # 1. 这个环境只负责安装软件和 R 包，不包含大型数据库与参考索引。
 # 2. Kraken2 / BLAST / STAR / Minimap2 所需数据库仍需单独准备。
-# 3. PRISM 仓库额外要求下载 genbank/ 目录并放到 <project_root>/00script/repo 下。
+# 3. PRISM 仓库额外要求下载 genbank/ 目录并放到 ${PROJECT_ROOT}/00script/repo 下。
 # 4. 这里保留 bioconda 的 `kraken2=2.17.1` 作为基础依赖。
 # 5. 如果你需要 GitHub PR #1015 的下载修复版，请在创建环境后执行：
-#    `bash ${PROJECT_ROOT}/00script/install_kraken2_pr1015.sh`
+#    `bash ${PROJECT_ROOT}/00script/07_patch_installs/install_kraken2_pr1015.sh`
 # 6. 该安装脚本会从源码编译并把修复版放到当前 conda 环境中，使 `k2/kraken2/kraken2-build`
 #    优先指向修复版。
 
@@ -30,7 +30,7 @@ dependencies:
   # R 与 R 包
   - r-base=4.3.3
   - r-optparse=1.7.5
-  - bioconductor-shortread=1.60.0
+  # - bioconductor-shortread=1.60.0 # 若网络不佳先注释掉
   - r-tidyverse=2.0.0
   - r-furrr=0.3.1
   - r-data.table=1.17.8

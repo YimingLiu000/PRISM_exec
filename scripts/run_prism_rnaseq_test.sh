@@ -6,7 +6,7 @@
 # 3. 输出结果到 ~/PRISM/02fastq/<sample>_prism/
 #
 # 运行前必须完成：
-# 1. conda env create -f ${PROJECT_ROOT}/00script/environment_prism.yml
+# 1. conda env create -f ${PROJECT_ROOT}/00script/01_env/environment_prism.yml
 # 2. conda activate prism
 # 3. 执行 00script 中的数据准备脚本，完成：
 #    - Kraken2 推荐数据库
@@ -26,8 +26,8 @@ set -euo pipefail
 # 自动推断项目根目录
 # 优先级：
 # 1. 用户显式传入的 PROJECT_ROOT 环境变量
-# 2. 当前脚本位于 <project_root>/00script，且 repo 在 <project_root>/00script/repo
-# 3. 当前脚本位于 <project_root>/PRISM_linux_bundle/scripts，且 repo 在 <project_root>/00script/repo
+# 2. 当前脚本位于 ${PROJECT_ROOT}/00script/05_analysis，且 repo 在 ${PROJECT_ROOT}/00script/repo
+# 3. 当前脚本位于 ${PROJECT_ROOT}/PRISM_linux_bundle/scripts，且 repo 在 ${PROJECT_ROOT}/00script/repo
 # 4. 默认使用 ~/PRISM
 # -----------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -120,7 +120,7 @@ fi
 
 if [[ ! -f "${ACCESSION_MAP}" ]]; then
   echo "[错误] 缺少 sorted_accession_map.txt: ${ACCESSION_MAP}"
-  echo "       请先运行 ${PROJECT_ROOT}/00script/download_prism_blast_core_nt.sh"
+  echo "       请先运行 ${PROJECT_ROOT}/00script/03_blast/download_prism_blast_core_nt.sh"
   exit 1
 fi
 

@@ -34,7 +34,7 @@
 #    conda activate prism
 #
 # 2. 运行本脚本：
-#    bash ${PROJECT_ROOT}/00script/install_kraken2_pr1015_offline.sh
+#    bash ${PROJECT_ROOT}/00script/07_patch_installs/install_kraken2_pr1015_offline.sh
 #
 # 3. 如果你上传源码目录而不是 tar.gz，可以改用环境变量指定：
 #    KRAKEN2_SRC_DIR=/your/path/to/kraken2 bash install_kraken2_pr1015_offline.sh
@@ -123,4 +123,3 @@ echo "[说明] 当前优先命令路径:"
 which k2 || true
 which kraken2 || true
 which kraken2-build || true
-

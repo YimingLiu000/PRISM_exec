@@ -1,15 +1,15 @@
-# PRISM 数据准备说明
+# PRISM 数据准备与运行说明
 
 ## 目标
 
-准备 PRISM 运行所需的参考资源：
+这个目录用于支持 PRISM 的环境配置、数据库准备、RNA-seq 分析和真菌结果提取。
 
-1. Kraken2 分类数据库
-2. BLAST `core_nt`
-3. `sorted_accession_map.txt`
-4. Minimap2 宿主索引
-5. STAR 宿主索引
-6. `genbank/` 辅助目录
+当前约定：
+
+- PRISM 仓库源码放在：`${PROJECT_ROOT}/00script/repo`
+- 原始 RNA-seq 数据放在：`${PROJECT_ROOT}/01rawdata`
+- 参考数据库与索引放在：`${PROJECT_ROOT}/02ref`
+- 运行输出放在：`${PROJECT_ROOT}/02fastq`
 
 ## 先说明变量写法
 
@@ -21,23 +21,91 @@ export PROJECT_ROOT=/your/path/to/PRISM
 
 后续文档中的 `${PROJECT_ROOT}` 才是可以直接复制执行的 shell 写法。
 
+## 00script 目录结构与用途
+
+### 1. `01_env`
+用于环境配置。
+
+包含：
+- `environment_prism.yml`
+
+用途：
+- 创建 conda 环境
+
+### 2. `02_kraken`
+用于 Kraken2 / k2 数据库下载与构建。
+
+包含：
+- `download_prism_kraken2_sources.sh`
+  作用：下载 PRISM 推荐 Kraken2 数据库的源数据
+- `download_prism_kraken2_sources_retry.sh`
+  作用：下载中断后自动自检并重试
+- `build_prism_kraken2_recommended.sh`
+  作用：基于已下载好的源数据构建最终 Kraken2 数据库
+- `download_prackendb.sh`
+  作用：并行下载官方提供的 PrackenDB 归档
+
+### 3. `03_blast`
+用于 BLAST / core_nt 数据库下载、校验和整理。
+
+包含：
+- `download_prism_blast_core_nt_sources.sh`
+  作用：下载 BLAST `core_nt` 源数据
+- `download_prism_blast_core_nt.sh`
+  作用：基于已下载好的 `core_nt` 源数据生成 `sorted_accession_map.txt`
+- `download_core_nt_db.sh`
+  作用：下载 Kraken 官方上传的 `k2_core_nt_20251015.tar.gz`
+- `unpack_core_nt_db.sh`
+  作用：解压下载好的 `core_nt` 数据库归档
+
+### 4. `04_host`
+用于宿主参考与宿主索引。
+
+包含：
+- `download_prism_host_reference.sh`
+  作用：下载宿主参考基因组源数据
+- `build_prism_host_indexes.sh`
+  作用：基于源数据构建 Minimap2 和 STAR 索引
+
+### 5. `05_analysis`
+用于实际运行 PRISM 和提取真菌结果。
+
+包含：
+- `run_prism_rnaseq_test.sh`
+  作用：基于准备好的数据库与索引运行 PRISM 测试流程
+- `extract_fungal_abundance.R`
+  作用：从 PRISM 最终结果中提取真菌 read、物种汇总和最终 FASTA
+
+### 6. `06_docs`
+用于保存中文说明文档。
+
+包含：
+- `PRISM_DATABASE_PREP_zh.md`
+
+### 7. `07_patch_installs`
+用于安装特殊修复版软件。
+
+包含：
+- `install_kraken2_pr1015.sh`
+  作用：在线安装 Kraken2 PR #1015 修复版
+- `install_kraken2_pr1015_offline.sh`
+  作用：离线安装 Kraken2 PR #1015 修复版
+
 ## 1. 环境配置
 
 ### 1.1 创建 conda 环境
 
 ```bash
-conda env create -f ${PROJECT_ROOT}/00script/environment_prism.yml
+conda env create -f ${PROJECT_ROOT}/00script/01_env/environment_prism.yml
 conda activate prism
 ```
 
 ### 1.2 可选：安装 Kraken2 PR #1015 修复版
 
-如果你希望在当前 conda 环境中安装 Kraken2 PR #1015 修复版：
-
 #### 服务器可以直接访问 GitHub
 
 ```bash
-bash ${PROJECT_ROOT}/00script/install_kraken2_pr1015.sh
+bash ${PROJECT_ROOT}/00script/07_patch_installs/install_kraken2_pr1015.sh
 ```
 
 #### 服务器不能访问 GitHub
@@ -62,7 +130,7 @@ ${PROJECT_ROOT}/02ref/src/kraken2-pr1015-src.tar.gz
 然后在服务器上执行：
 
 ```bash
-bash ${PROJECT_ROOT}/00script/install_kraken2_pr1015_offline.sh
+bash ${PROJECT_ROOT}/00script/07_patch_installs/install_kraken2_pr1015_offline.sh
 ```
 
 说明：
@@ -75,7 +143,13 @@ bash ${PROJECT_ROOT}/00script/install_kraken2_pr1015_offline.sh
 ### 2.1 下载机
 
 ```bash
-bash ${PROJECT_ROOT}/00script/download_prism_kraken2_sources.sh
+bash ${PROJECT_ROOT}/00script/02_kraken/download_prism_kraken2_sources.sh
+```
+
+如果网络不稳定、容易中断，建议优先使用：
+
+```bash
+bash ${PROJECT_ROOT}/00script/02_kraken/download_prism_kraken2_sources_retry.sh
 ```
 
 源数据目录：
@@ -89,7 +163,7 @@ ${PROJECT_ROOT}/02ref/kraken2_sources/prism_kraken2_recommended
 把源数据目录复制到服务器同路径后：
 
 ```bash
-bash ${PROJECT_ROOT}/00script/build_prism_kraken2_recommended.sh
+bash ${PROJECT_ROOT}/00script/02_kraken/build_prism_kraken2_recommended.sh
 ```
 
 最终数据库目录：
@@ -103,7 +177,7 @@ ${PROJECT_ROOT}/02ref/kraken2/prism_kraken2_recommended
 ### 3.1 下载机
 
 ```bash
-bash ${PROJECT_ROOT}/00script/download_prism_blast_core_nt_sources.sh
+bash ${PROJECT_ROOT}/00script/03_blast/download_prism_blast_core_nt_sources.sh
 ```
 
 源数据目录：
@@ -117,7 +191,7 @@ ${PROJECT_ROOT}/02ref/blast_sources/core_nt
 把源数据目录复制到服务器同路径后：
 
 ```bash
-bash ${PROJECT_ROOT}/00script/download_prism_blast_core_nt.sh
+bash ${PROJECT_ROOT}/00script/03_blast/download_prism_blast_core_nt.sh
 ```
 
 最终会生成并复制：
@@ -131,7 +205,7 @@ ${PROJECT_ROOT}/00script/repo/sorted_accession_map.txt
 ### 4.1 下载机
 
 ```bash
-bash ${PROJECT_ROOT}/00script/download_prism_host_reference.sh
+bash ${PROJECT_ROOT}/00script/04_host/download_prism_host_reference.sh
 ```
 
 宿主源数据目录：
@@ -145,7 +219,7 @@ ${PROJECT_ROOT}/02ref/host_sources/GRCh38_refseq
 把宿主源数据目录复制到服务器同路径后：
 
 ```bash
-bash ${PROJECT_ROOT}/00script/build_prism_host_indexes.sh
+bash ${PROJECT_ROOT}/00script/04_host/build_prism_host_indexes.sh
 ```
 
 默认输出目录：
@@ -168,20 +242,32 @@ ${PROJECT_ROOT}/00script/repo/genbank
 bash ${PROJECT_ROOT}/00script/check_prism_required_data.sh
 ```
 
-## 7. 推荐执行顺序
+## 7. 运行 PRISM
+
+```bash
+bash ${PROJECT_ROOT}/00script/05_analysis/run_prism_rnaseq_test.sh
+```
+
+## 8. 提取真菌结果
+
+```bash
+Rscript ${PROJECT_ROOT}/00script/05_analysis/extract_fungal_abundance.R FUSCCTNBC001
+```
+
+## 9. 推荐执行顺序
 
 ```bash
 export PROJECT_ROOT=/your/path/to/PRISM
-conda env create -f ${PROJECT_ROOT}/00script/environment_prism.yml
+conda env create -f ${PROJECT_ROOT}/00script/01_env/environment_prism.yml
 conda activate prism
 
 # 可选：如果需要，先安装 Kraken2 PR #1015 修复版
-# bash ${PROJECT_ROOT}/00script/install_kraken2_pr1015.sh
+# bash ${PROJECT_ROOT}/00script/07_patch_installs/install_kraken2_pr1015.sh
 
 # 下载机上执行
-bash ${PROJECT_ROOT}/00script/download_prism_kraken2_sources.sh
-bash ${PROJECT_ROOT}/00script/download_prism_blast_core_nt_sources.sh
-bash ${PROJECT_ROOT}/00script/download_prism_host_reference.sh
+bash ${PROJECT_ROOT}/00script/02_kraken/download_prism_kraken2_sources.sh
+bash ${PROJECT_ROOT}/00script/03_blast/download_prism_blast_core_nt_sources.sh
+bash ${PROJECT_ROOT}/00script/04_host/download_prism_host_reference.sh
 
 # 把以下目录复制到服务器同路径
 # ${PROJECT_ROOT}/02ref/kraken2_sources/prism_kraken2_recommended
@@ -189,13 +275,13 @@ bash ${PROJECT_ROOT}/00script/download_prism_host_reference.sh
 # ${PROJECT_ROOT}/02ref/host_sources/GRCh38_refseq
 
 # 服务器上执行
-bash ${PROJECT_ROOT}/00script/build_prism_kraken2_recommended.sh
-bash ${PROJECT_ROOT}/00script/download_prism_blast_core_nt.sh
-bash ${PROJECT_ROOT}/00script/build_prism_host_indexes.sh
+bash ${PROJECT_ROOT}/00script/02_kraken/build_prism_kraken2_recommended.sh
+bash ${PROJECT_ROOT}/00script/03_blast/download_prism_blast_core_nt.sh
+bash ${PROJECT_ROOT}/00script/04_host/build_prism_host_indexes.sh
 bash ${PROJECT_ROOT}/00script/check_prism_required_data.sh
 ```
 
-## 8. 注意事项
+## 10. 注意事项
 
 1. `core_nt` 很大，下载和磁盘占用都不小。
 2. Kraken2、BLAST、宿主索引都建议分成“下载机”和“服务器构建机”两段式。
