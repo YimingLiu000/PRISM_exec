@@ -30,6 +30,14 @@ GENBANK_DIR="${PRISM_ROOT}/genbank"
 MODEL_TAXID_FILE="${PRISM_ROOT}/model_org_taxids.txt"
 
 echo "[检查] PRISM 运行数据检查"
+echo "[检查] 目标标准路径如下："
+echo "       KRAKEN_DB=${KRAKEN_DB}"
+echo "       BLAST_DB=${BLAST_DB}"
+echo "       MINIMAP2_INDEX=${MINIMAP2_INDEX}"
+echo "       STAR_GENOME_DIR=${STAR_DIR}"
+echo "       ACCESSION_MAP=${ACCESSION_MAP}"
+echo "       MODEL_TAXID_FILE=${MODEL_TAXID_FILE}"
+echo
 
 check_path() {
   local label="$1"

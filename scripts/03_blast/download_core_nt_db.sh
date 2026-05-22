@@ -22,7 +22,7 @@
 #
 # 可调参数：
 #   PROJECT_ROOT      项目目录
-#   OUT_DIR           输出目录，默认 ${PROJECT_ROOT}/02ref/kraken2_core_nt_db
+#   OUT_DIR           输出目录，默认 ${PROJECT_ROOT}/02ref/blast/core_nt_download
 #   URL               下载链接
 #   ARIA2_SPLITS      并发连接数，默认 16
 #   MAX_RETRIES       重试次数，默认 20
@@ -41,7 +41,7 @@ else
 fi
 
 URL="${URL:-https://genome-idx.s3.amazonaws.com/kraken/k2_core_nt_20251015.tar.gz}"
-OUT_DIR="${OUT_DIR:-${PROJECT_ROOT}/02ref/kraken2_core_nt_db}"
+OUT_DIR="${OUT_DIR:-${PROJECT_ROOT}/02ref/blast/core_nt_download}"
 FILENAME="$(basename "${URL}")"
 OUT_FILE="${OUT_DIR}/${FILENAME}"
 ARIA2_SPLITS="${ARIA2_SPLITS:-16}"

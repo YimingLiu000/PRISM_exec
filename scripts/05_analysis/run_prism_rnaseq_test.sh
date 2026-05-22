@@ -9,10 +9,18 @@
 # 1. conda env create -f ${PROJECT_ROOT}/00script/01_env/environment_prism.yml
 # 2. conda activate prism
 # 3. 执行 00script 中的数据准备脚本，完成：
-#    - Kraken2 推荐数据库
-#    - BLAST core_nt
-#    - Minimap2 / STAR 宿主索引
-#    - sorted_accession_map.txt
+#    - Kraken2 数据库，最终应位于：
+#      ${PROJECT_ROOT}/02ref/kraken2/prism_kraken2_recommended
+#    - BLAST core_nt 数据库，最终应位于：
+#      ${PROJECT_ROOT}/02ref/blast/core_nt
+#    - Minimap2 宿主索引，最终应位于：
+#      ${PROJECT_ROOT}/02ref/host/hg38.minimap2/hg38.mmi
+#    - STAR 宿主索引，最终应位于：
+#      ${PROJECT_ROOT}/02ref/host/hg38.star
+#    - sorted_accession_map.txt，最终应位于：
+#      ${PROJECT_ROOT}/00script/repo/sorted_accession_map.txt
+#    - PRISM 仓库模型生物 taxid 文件：
+#      ${PROJECT_ROOT}/00script/repo/model_org_taxids.txt
 # 4. 将 PRISM 需要的 genbank/ 目录放到 ${PROJECT_ROOT}/00script/repo/genbank
 #
 # 注意：
@@ -120,7 +128,7 @@ fi
 
 if [[ ! -f "${ACCESSION_MAP}" ]]; then
   echo "[错误] 缺少 sorted_accession_map.txt: ${ACCESSION_MAP}"
-  echo "       请先运行 ${PROJECT_ROOT}/00script/03_blast/download_prism_blast_core_nt.sh"
+  echo "       请先运行 ${PROJECT_ROOT}/00script/03_blast/generate_sorted_accession_map.sh"
   exit 1
 fi
 

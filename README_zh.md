@@ -23,73 +23,43 @@ export PROJECT_ROOT=/your/path/to/PRISM
 
 ## 00script 目录结构与用途
 
+`PRISM_linux_bundle/scripts/` 目录已经按完全相同的子目录结构整理，便于你直接对照 `00script/` 使用。
+
 ### 1. `01_env`
-用于环境配置。
-
-包含：
-- `environment_prism.yml`
-
-用途：
-- 创建 conda 环境
+环境配置。
 
 ### 2. `02_kraken`
-用于 Kraken2 / k2 数据库下载与构建。
-
-包含：
-- `download_prism_kraken2_sources.sh`
-  作用：下载 PRISM 推荐 Kraken2 数据库的源数据
-- `download_prism_kraken2_sources_retry.sh`
-  作用：下载中断后自动自检并重试
-- `build_prism_kraken2_recommended.sh`
-  作用：基于已下载好的源数据构建最终 Kraken2 数据库
-- `download_prackendb.sh`
-  作用：并行下载官方提供的 PrackenDB 归档
+Kraken2 / k2 数据库下载与构建。
 
 ### 3. `03_blast`
-用于 BLAST / core_nt 数据库下载、校验和整理。
+BLAST / core_nt 数据库下载、解压与 map 生成。
 
 包含：
 - `download_prism_blast_core_nt_sources.sh`
-  作用：下载 BLAST `core_nt` 源数据
-- `download_prism_blast_core_nt.sh`
-  作用：基于已下载好的 `core_nt` 源数据生成 `sorted_accession_map.txt`
+  作用：并行下载 NCBI BLAST `core_nt` 分卷源文件，校验 md5，并自动解压到标准目录
+- `generate_sorted_accession_map.sh`
+  作用：基于标准目录中的 `core_nt` 数据库生成 `sorted_accession_map.txt`
 - `download_core_nt_db.sh`
   作用：下载 Kraken 官方上传的 `k2_core_nt_20251015.tar.gz`
 - `unpack_core_nt_db.sh`
-  作用：解压下载好的 `core_nt` 数据库归档
+  作用：将官方 `core_nt` 归档直接解压到下游分析所需的标准目录
+
+作用总结：
+- 支持两种 BLAST `core_nt` 数据准备方式
+  1. 先下载源数据后自行构建/整理
+  2. 直接下载官方已构建数据库并解压
 
 ### 4. `04_host`
-用于宿主参考与宿主索引。
-
-包含：
-- `download_prism_host_reference.sh`
-  作用：下载宿主参考基因组源数据
-- `build_prism_host_indexes.sh`
-  作用：基于源数据构建 Minimap2 和 STAR 索引
+宿主参考与宿主索引。
 
 ### 5. `05_analysis`
-用于实际运行 PRISM 和提取真菌结果。
-
-包含：
-- `run_prism_rnaseq_test.sh`
-  作用：基于准备好的数据库与索引运行 PRISM 测试流程
-- `extract_fungal_abundance.R`
-  作用：从 PRISM 最终结果中提取真菌 read、物种汇总和最终 FASTA
+PRISM 分析与真菌结果提取。
 
 ### 6. `06_docs`
-用于保存中文说明文档。
-
-包含：
-- `PRISM_DATABASE_PREP_zh.md`
+中文说明文档。
 
 ### 7. `07_patch_installs`
-用于安装特殊修复版软件。
-
-包含：
-- `install_kraken2_pr1015.sh`
-  作用：在线安装 Kraken2 PR #1015 修复版
-- `install_kraken2_pr1015_offline.sh`
-  作用：离线安装 Kraken2 PR #1015 修复版
+Kraken2 PR #1015 修复版安装脚本。
 
 ## 1. 环境配置
 
@@ -140,7 +110,49 @@ bash ${PROJECT_ROOT}/00script/07_patch_installs/install_kraken2_pr1015_offline.s
 
 ## 2. Kraken2 数据库
 
-### 2.1 下载机
+你现在有两种方式准备 Kraken2 数据库，这两种方式最终都应落到：
+
+```bash
+${PROJECT_ROOT}/02ref/kraken2/prism_kraken2_recommended
+```
+
+因此下游分析脚本中的：
+
+```bash
+KRAKEN_DB=${PROJECT_ROOT}/02ref/kraken2/prism_kraken2_recommended
+```
+
+不需要修改。
+
+### 方式 A：直接下载 Kraken 官方已构建数据库
+
+#### 下载压缩包
+
+```bash
+bash ${PROJECT_ROOT}/00script/02_kraken/download_prackendb.sh
+```
+
+默认下载到：
+
+```bash
+${PROJECT_ROOT}/02ref/kraken2_prackendb/k2_NCBI_reference_20251007.tar.gz
+```
+
+#### 解压到标准目录
+
+```bash
+bash ${PROJECT_ROOT}/00script/02_kraken/unpack_prackendb.sh
+```
+
+默认会直接解压到：
+
+```bash
+${PROJECT_ROOT}/02ref/kraken2/prism_kraken2_recommended
+```
+
+### 方式 B：下载源数据后自行构建
+
+#### 下载机
 
 ```bash
 bash ${PROJECT_ROOT}/00script/02_kraken/download_prism_kraken2_sources.sh
@@ -158,7 +170,7 @@ bash ${PROJECT_ROOT}/00script/02_kraken/download_prism_kraken2_sources_retry.sh
 ${PROJECT_ROOT}/02ref/kraken2_sources/prism_kraken2_recommended
 ```
 
-### 2.2 服务器
+#### 服务器
 
 把源数据目录复制到服务器同路径后：
 
@@ -174,7 +186,49 @@ ${PROJECT_ROOT}/02ref/kraken2/prism_kraken2_recommended
 
 ## 3. BLAST core_nt
 
-### 3.1 下载机
+你现在也有两种方式准备 BLAST `core_nt`，这两种方式最终都应落到：
+
+```bash
+${PROJECT_ROOT}/02ref/blast/core_nt
+```
+
+因此下游分析脚本中的：
+
+```bash
+BLAST_DB=${PROJECT_ROOT}/02ref/blast/core_nt/core_nt
+```
+
+不需要修改。
+
+### 方式 A：直接下载 Kraken 官方已构建 core_nt 数据库
+
+#### 下载压缩包
+
+```bash
+bash ${PROJECT_ROOT}/00script/03_blast/download_core_nt_db.sh
+```
+
+默认下载到：
+
+```bash
+${PROJECT_ROOT}/02ref/blast/core_nt_download/k2_core_nt_20251015.tar.gz
+```
+
+#### 解压到标准目录
+
+```bash
+bash ${PROJECT_ROOT}/00script/03_blast/unpack_core_nt_db.sh
+```
+
+默认会直接解压到：
+
+```bash
+${PROJECT_ROOT}/02ref/blast/core_nt
+```
+
+### 方式 B：下载源数据后自行准备
+
+#### 下载机
 
 ```bash
 bash ${PROJECT_ROOT}/00script/03_blast/download_prism_blast_core_nt_sources.sh
@@ -186,12 +240,12 @@ bash ${PROJECT_ROOT}/00script/03_blast/download_prism_blast_core_nt_sources.sh
 ${PROJECT_ROOT}/02ref/blast_sources/core_nt
 ```
 
-### 3.2 服务器
+#### 服务器
 
 把源数据目录复制到服务器同路径后：
 
 ```bash
-bash ${PROJECT_ROOT}/00script/03_blast/download_prism_blast_core_nt.sh
+bash ${PROJECT_ROOT}/00script/03_blast/generate_sorted_accession_map.sh
 ```
 
 最终会生成并复制：
@@ -276,7 +330,7 @@ bash ${PROJECT_ROOT}/00script/04_host/download_prism_host_reference.sh
 
 # 服务器上执行
 bash ${PROJECT_ROOT}/00script/02_kraken/build_prism_kraken2_recommended.sh
-bash ${PROJECT_ROOT}/00script/03_blast/download_prism_blast_core_nt.sh
+bash ${PROJECT_ROOT}/00script/03_blast/generate_sorted_accession_map.sh
 bash ${PROJECT_ROOT}/00script/04_host/build_prism_host_indexes.sh
 bash ${PROJECT_ROOT}/00script/check_prism_required_data.sh
 ```
@@ -290,4 +344,3 @@ bash ${PROJECT_ROOT}/00script/check_prism_required_data.sh
 ```bash
 --model_org_taxids ${PROJECT_ROOT}/00script/repo/model_org_taxids.txt
 ```
-
