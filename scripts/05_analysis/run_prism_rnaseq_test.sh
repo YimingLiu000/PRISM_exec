@@ -84,6 +84,7 @@ ACCESSION_MAP="${PRISM_ROOT}/sorted_accession_map.txt"
 # 自动获取软件路径
 # 前提：你已经激活 conda 环境 prism
 # -----------------------------
+KRAKEN2_EXTRA_OPTS="${KRAKEN2_EXTRA_OPTS:---memory-mapping}"
 KRAKEN2_BIN="$(command -v kraken2)"
 SEQKIT_BIN="$(command -v seqkit)"
 MINIMAP2_BIN="$(command -v minimap2)"
@@ -201,6 +202,7 @@ echo "[运行] 开始执行 PRISM"
   --seqkit_path "${SEQKIT_BIN}" \
   --minimap2_path "${MINIMAP2_BIN}" \
   --minimap2_index "${MINIMAP2_INDEX}" \
+  --kraken_extra_opts="${KRAKEN2_EXTRA_OPTS}" \
   --star_path "${STAR_BIN}" \
   --star_genome_dir "${STAR_GENOME_DIR}" \
   --model_org_taxids "${PRISM_ROOT}/model_org_taxids.txt" \

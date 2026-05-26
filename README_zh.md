@@ -28,8 +28,32 @@ export PROJECT_ROOT=/your/path/to/PRISM
 ### 1. `01_env`
 环境配置。
 
+包含：
+- `environment_prism.yml`
+  作用：创建 PRISM 所需的 conda 环境
+
+作用总结：
+- 安装 R 包、Kraken2/BLAST/宿主索引构建工具等基础依赖
+
 ### 2. `02_kraken`
 Kraken2 / k2 数据库下载与构建。
+
+包含：
+- `download_prism_kraken2_sources.sh`
+  作用：下载 PRISM 推荐 Kraken2 数据库的源数据
+- `download_prism_kraken2_sources_retry.sh`
+  作用：下载中断后自动自检并重试
+- `build_prism_kraken2_recommended.sh`
+  作用：基于已下载好的源数据构建最终 Kraken2 数据库
+- `download_prackendb.sh`
+  作用：并行下载官方提供的 PrackenDB 归档
+- `unpack_prackendb.sh`
+  作用：将 PrackenDB 解压到下游分析所需的标准目录
+
+作用总结：
+- 支持两种 Kraken2 数据准备方式
+  1. 先下载源数据后自行构建
+  2. 直接下载官方已构建数据库并解压
 
 ### 3. `03_blast`
 BLAST / core_nt 数据库下载、解压与 map 生成。
@@ -52,14 +76,73 @@ BLAST / core_nt 数据库下载、解压与 map 生成。
 ### 4. `04_host`
 宿主参考与宿主索引。
 
+包含：
+- `download_prism_host_reference.sh`
+  作用：下载宿主参考基因组源数据
+- `build_prism_host_indexes.sh`
+  作用：基于宿主源数据构建 Minimap2 和 STAR 索引
+
+作用总结：
+- 为 PRISM 的多轮宿主去除步骤准备宿主参考索引
+
 ### 5. `05_analysis`
 PRISM 分析与真菌结果提取。
+
+包含：
+- `run_prism_rnaseq_test.sh`
+  作用：基于准备好的数据库与索引运行 PRISM 测试流程
+- `extract_fungal_abundance.R`
+  作用：从 PRISM 最终结果中提取真菌 read、物种汇总和最终 FASTA
+
+作用总结：
+- 调用 PRISM 主流程
+- 对最终结果做真菌专门提取
 
 ### 6. `06_docs`
 中文说明文档。
 
+包含：
+- `PRISM_DATABASE_PREP_zh.md`
+  作用：源码目录中的中文数据准备与运行说明
+
+作用总结：
+- 保存和 `README_zh.md` 对应的中文说明
+
 ### 7. `07_patch_installs`
 Kraken2 PR #1015 修复版安装脚本。
+
+包含：
+- `install_kraken2_pr1015.sh`
+  作用：在线安装 Kraken2 PR #1015 修复版
+- `install_kraken2_pr1015_offline.sh`
+  作用：离线安装 Kraken2 PR #1015 修复版
+
+作用总结：
+- 当标准环境中的 Kraken2 下载存在已知问题时，覆盖安装修复版
+
+### 8. `08_transfer`
+项目迁移脚本。
+
+包含：
+- `transfer_prism_project_to_new_server.sh`
+  作用：使用 `rsync` 将整个项目目录传输到新的服务器，支持断点续传与可选镜像同步
+
+作用总结：
+- 在旧服务器和新服务器之间迁移整个 PRISM 项目
+
+### 9. `00script` 根目录中的其他脚本
+
+当前 `00script` 根目录还保留了一些历史/备用脚本：
+
+- `build_fungi_refseq_db.sh`
+- `build_prism_formal_db.sh`
+- `check_prism_required_data.sh`
+
+其中：
+- `check_prism_required_data.sh`
+  作用：检查当前项目目录下的数据库、宿主索引、`sorted_accession_map.txt` 和 `genbank` 是否齐全
+- 另外两个 `build_*.sh`
+  更多属于历史探索或替代性建库方案，不是当前 README 推荐主流程的一部分
 
 ## 1. 环境配置
 
@@ -107,6 +190,14 @@ bash ${PROJECT_ROOT}/00script/07_patch_installs/install_kraken2_pr1015_offline.s
 
 - 数据库下载/构建阶段可以使用 `k2`
 - 后续 PRISM 分析仍旧继续调用 `kraken2`
+- 分析脚本默认会给 Kraken2 加上 `--memory-mapping`
+- 如果你想覆盖它，可以在运行前设置：
+
+```bash
+export KRAKEN2_EXTRA_OPTS="--memory-mapping"
+```
+
+或者改成别的 Kraken2 额外参数
 
 ## 2. Kraken2 数据库
 
@@ -344,3 +435,37 @@ bash ${PROJECT_ROOT}/00script/check_prism_required_data.sh
 ```bash
 --model_org_taxids ${PROJECT_ROOT}/00script/repo/model_org_taxids.txt
 ```
+
+## 11. 迁移到新服务器
+
+如果你需要把整个 PRISM 项目从旧服务器同步到新服务器，可以先用 dry-run 预演：
+
+```bash
+bash ${PROJECT_ROOT}/00script/08_transfer/transfer_prism_project_to_new_server.sh \
+  /home/data/vip0/project/11PRISM \
+  ubuntu \
+  ssh.sxqtx.com \
+  /home/ubuntu/PRISM \
+  13569 \
+  --dry-run
+```
+
+确认无误后，再正式执行：
+
+```bash
+bash ${PROJECT_ROOT}/00script/08_transfer/transfer_prism_project_to_new_server.sh \
+  /home/data/vip0/project/11PRISM \
+  ubuntu \
+  ssh.sxqtx.com \
+  /home/ubuntu/PRISM \
+  13569
+```
+
+说明：
+
+- 第 1 个参数：源目录
+- 第 2 个参数：远端用户名
+- 第 3 个参数：远端主机名/IP
+- 第 4 个参数：远端目标目录
+- 第 5 个参数：SSH 端口（这里是 `13569`）
+- 第 6 个参数：可选，写 `--dry-run` 时只预演命令，不会真正传输
