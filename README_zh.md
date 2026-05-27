@@ -461,6 +461,18 @@ bash ${PROJECT_ROOT}/00script/08_transfer/transfer_prism_project_to_new_server.s
   13569
 ```
 
+如果你不能使用 SSH 免密登录，也可以直接把密码作为第 6 个参数传入（不推荐长期使用，因为密码会暴露在 shell 历史中）：
+
+```bash
+bash ${PROJECT_ROOT}/00script/08_transfer/transfer_prism_project_to_new_server.sh \
+  /home/data/vip0/project/11PRISM \
+  ubuntu \
+  ssh.sxqtx.com \
+  /home/ubuntu/PRISM \
+  13569 \
+  'your_password'
+```
+
 说明：
 
 - 第 1 个参数：源目录
@@ -468,4 +480,6 @@ bash ${PROJECT_ROOT}/00script/08_transfer/transfer_prism_project_to_new_server.s
 - 第 3 个参数：远端主机名/IP
 - 第 4 个参数：远端目标目录
 - 第 5 个参数：SSH 端口（这里是 `13569`）
-- 第 6 个参数：可选，写 `--dry-run` 时只预演命令，不会真正传输
+- 第 6 个参数：可选，SSH 密码
+- 第 7 个参数：可选，写 `--dry-run` 时只预演命令，不会真正传输
+- 如果要用密码模式，系统需要安装 `sshpass`

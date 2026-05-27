@@ -24,6 +24,7 @@ dependencies:
   - make
   - perl=5.32.1
   - sed
+  - sshpass
   - pigz=2.8
   - unzip
 
