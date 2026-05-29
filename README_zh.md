@@ -61,6 +61,8 @@ BLAST / core_nt 数据库下载、解压与 map 生成。
 包含：
 - `download_prism_blast_core_nt_sources.sh`
   作用：并行下载 NCBI BLAST `core_nt` 分卷源文件，校验 md5，并自动解压到标准目录
+- `unpack_prism_blast_core_nt_sources.sh`
+  作用：当你已经把 `core_nt_archives` 从别的机器同步过来时，仅做校验与解压，不重新下载
 - `generate_sorted_accession_map.sh`
   作用：基于标准目录中的 `core_nt` 数据库生成 `sorted_accession_map.txt`
 - `download_core_nt_db.sh`
@@ -72,6 +74,7 @@ BLAST / core_nt 数据库下载、解压与 map 生成。
 - 支持两种 BLAST `core_nt` 数据准备方式
   1. 先下载源数据后自行构建/整理
   2. 直接下载官方已构建数据库并解压
+  3. 对已经同步好的 `core_nt_archives` 做单独解压
 
 ### 4. `04_host`
 宿主参考与宿主索引。
