@@ -65,16 +65,11 @@ BLAST / core_nt 数据库下载、解压与 map 生成。
   作用：当你已经把 `core_nt_archives` 从别的机器同步过来时，仅做校验与解压，不重新下载
 - `generate_sorted_accession_map.sh`
   作用：基于标准目录中的 `core_nt` 数据库生成 `sorted_accession_map.txt`
-- `download_core_nt_db.sh`
-  作用：下载 Kraken 官方上传的 `k2_core_nt_20251015.tar.gz`
-- `unpack_core_nt_db.sh`
-  作用：将官方 `core_nt` 归档直接解压到下游分析所需的标准目录
 
 作用总结：
 - 支持两种 BLAST `core_nt` 数据准备方式
-  1. 先下载源数据后自行构建/整理
-  2. 直接下载官方已构建数据库并解压
-  3. 对已经同步好的 `core_nt_archives` 做单独解压
+  1. 先下载源数据后自行准备
+  2. 对已经同步好的 `core_nt_archives` 做单独解压
 
 ### 4. `04_host`
 宿主参考与宿主索引。
@@ -135,17 +130,10 @@ Kraken2 PR #1015 修复版安装脚本。
 
 ### 9. `00script` 根目录中的其他脚本
 
-当前 `00script` 根目录还保留了一些历史/备用脚本：
+当前 `00script` 根目录还保留了其他脚本：
 
-- `build_fungi_refseq_db.sh`
-- `build_prism_formal_db.sh`
-- `check_prism_required_data.sh`
-
-其中：
 - `check_prism_required_data.sh`
   作用：检查当前项目目录下的数据库、宿主索引、`sorted_accession_map.txt` 和 `genbank` 是否齐全
-- 另外两个 `build_*.sh`
-  更多属于历史探索或替代性建库方案，不是当前 README 推荐主流程的一部分
 
 ## 1. 环境配置
 
@@ -280,49 +268,7 @@ ${PROJECT_ROOT}/02ref/kraken2/prism_kraken2_recommended
 
 ## 3. BLAST core_nt
 
-你现在也有两种方式准备 BLAST `core_nt`，这两种方式最终都应落到：
-
-```bash
-${PROJECT_ROOT}/02ref/blast/core_nt
-```
-
-因此下游分析脚本中的：
-
-```bash
-BLAST_DB=${PROJECT_ROOT}/02ref/blast/core_nt/core_nt
-```
-
-不需要修改。
-
-### 方式 A：直接下载 Kraken 官方已构建 core_nt 数据库
-
-#### 下载压缩包
-
-```bash
-bash ${PROJECT_ROOT}/00script/03_blast/download_core_nt_db.sh
-```
-
-默认下载到：
-
-```bash
-${PROJECT_ROOT}/02ref/blast/core_nt_download/k2_core_nt_20251015.tar.gz
-```
-
-#### 解压到标准目录
-
-```bash
-bash ${PROJECT_ROOT}/00script/03_blast/unpack_core_nt_db.sh
-```
-
-默认会直接解压到：
-
-```bash
-${PROJECT_ROOT}/02ref/blast/core_nt
-```
-
-### 方式 B：下载源数据后自行准备
-
-#### 下载机
+### 3.1 下载机
 
 ```bash
 bash ${PROJECT_ROOT}/00script/03_blast/download_prism_blast_core_nt_sources.sh
@@ -334,7 +280,7 @@ bash ${PROJECT_ROOT}/00script/03_blast/download_prism_blast_core_nt_sources.sh
 ${PROJECT_ROOT}/02ref/blast_sources/core_nt
 ```
 
-#### 服务器
+### 3.2 服务器
 
 把源数据目录复制到服务器同路径后：
 
@@ -347,6 +293,7 @@ bash ${PROJECT_ROOT}/00script/03_blast/generate_sorted_accession_map.sh
 ```bash
 ${PROJECT_ROOT}/00script/repo/sorted_accession_map.txt
 ```
+
 
 ## 4. 宿主索引
 
