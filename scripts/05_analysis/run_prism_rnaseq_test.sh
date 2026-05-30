@@ -84,7 +84,7 @@ ACCESSION_MAP="${PRISM_ROOT}/sorted_accession_map.txt"
 # 自动获取软件路径
 # 前提：你已经激活 conda 环境 prism
 # -----------------------------
-KRAKEN2_EXTRA_OPTS="${KRAKEN2_EXTRA_OPTS:---memory-mapping}"
+KRAKEN2_EXTRA_OPTS="${KRAKEN2_EXTRA_OPTS---memory-mapping}"
 KRAKEN2_BIN="$(command -v kraken2)"
 SEQKIT_BIN="$(command -v seqkit)"
 MINIMAP2_BIN="$(command -v minimap2)"
@@ -99,6 +99,7 @@ BLAST_BIN_DIR="$(dirname "${BLASTN_BIN}")"
 # 前置检查
 # -----------------------------
 echo "[检查] 开始检查软件与目录"
+echo "[检查] 当前 Kraken2 额外参数: ${KRAKEN2_EXTRA_OPTS}"
 
 for exe in "${KRAKEN2_BIN}" "${SEQKIT_BIN}" "${MINIMAP2_BIN}" "${STAR_BIN}" "${BLASTN_BIN}" "${RSCRIPT_BIN}"; do
   if [[ ! -x "${exe}" ]]; then
