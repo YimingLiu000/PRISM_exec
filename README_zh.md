@@ -343,6 +343,42 @@ bash ${PROJECT_ROOT}/00script/check_prism_required_data.sh
 bash ${PROJECT_ROOT}/00script/05_analysis/run_prism_rnaseq_test.sh
 ```
 
+### Kraken2 额外参数说明
+
+当前运行脚本默认会给 Kraken2 加上：
+
+```bash
+--memory-mapping
+```
+
+这样可以减少 Kraken2 在分类时一次性把整个数据库完整加载进内存的压力，适合内存较紧张的服务器环境。
+
+如果你想显式指定或覆盖 Kraken2 的额外参数，可以在运行前设置环境变量：
+
+```bash
+export KRAKEN2_EXTRA_OPTS="--memory-mapping"
+```
+
+然后再执行：
+
+```bash
+bash ${PROJECT_ROOT}/00script/05_analysis/run_prism_rnaseq_test.sh
+```
+
+如果你想关闭默认的内存映射，也可以设为空：
+
+```bash
+export KRAKEN2_EXTRA_OPTS=""
+bash ${PROJECT_ROOT}/00script/05_analysis/run_prism_rnaseq_test.sh
+```
+
+如果你想在 `--memory-mapping` 基础上再追加其它 Kraken2 参数，也可以这样写：
+
+```bash
+export KRAKEN2_EXTRA_OPTS="--memory-mapping --quick"
+bash ${PROJECT_ROOT}/00script/05_analysis/run_prism_rnaseq_test.sh
+```
+
 ## 8. 提取真菌结果
 
 ```bash
