@@ -11,6 +11,11 @@
 - 参考数据库与索引放在：`${PROJECT_ROOT}/02ref`
 - 运行输出放在：`${PROJECT_ROOT}/02fastq`
 
+补充说明：
+
+- `PRISM_linux_bundle/repo/` 现在直接包含了 `00script/repo/` 的源码副本
+- 复制时已经排除了 `.git` 等 git 元数据
+
 ## 先说明变量写法
 
 建议你先定义项目目录变量：
@@ -79,9 +84,12 @@ BLAST / core_nt 数据库下载、解压与 map 生成。
   作用：下载宿主参考基因组源数据
 - `build_prism_host_indexes.sh`
   作用：基于宿主源数据构建 Minimap2 和 STAR 索引
+- `star_shared_memory_control.sh`
+  作用：使用 STAR 原生 `--genomeLoad` 机制预加载或移除 shared memory 中的 genome index
 
 作用总结：
 - 为 PRISM 的多轮宿主去除步骤准备宿主参考索引
+- 为多样本并行时的 STAR shared memory 复用提供控制入口
 
 ### 5. `05_analysis`
 PRISM 分析与真菌结果提取。
@@ -89,12 +97,15 @@ PRISM 分析与真菌结果提取。
 包含：
 - `run_prism_rnaseq_test.sh`
   作用：基于准备好的数据库与索引运行 PRISM 测试流程
+- `run_prism_samples_parallel_with_star_shared_memory.sh`
+  作用：在 STAR shared memory 模式下按并发数调度多个样本并行运行
 - `extract_fungal_abundance.R`
   作用：从 PRISM 最终结果中提取真菌 read、物种汇总和最终 FASTA
 
 作用总结：
 - 调用 PRISM 主流程
 - 对最终结果做真菌专门提取
+- 支持在预加载宿主索引后进行多样本并行调度
 
 ### 6. `06_docs`
 中文说明文档。
@@ -323,6 +334,20 @@ bash ${PROJECT_ROOT}/00script/04_host/build_prism_host_indexes.sh
 ${PROJECT_ROOT}/02ref/host
 ```
 
+### 4.3 可选：STAR shared memory 预加载
+
+如果你计划并行运行多个样本，并希望多个 STAR 进程复用同一份宿主 genome index，可先执行：
+
+```bash
+bash ${PROJECT_ROOT}/00script/04_host/star_shared_memory_control.sh load
+```
+
+所有并行任务结束后，再执行：
+
+```bash
+bash ${PROJECT_ROOT}/00script/04_host/star_shared_memory_control.sh remove
+```
+
 ## 5. genbank 目录
 
 需要手动把 PRISM 的 `genbank/` 目录放到：
@@ -378,6 +403,22 @@ bash ${PROJECT_ROOT}/00script/05_analysis/run_prism_rnaseq_test.sh
 export KRAKEN2_EXTRA_OPTS="--memory-mapping --quick"
 bash ${PROJECT_ROOT}/00script/05_analysis/run_prism_rnaseq_test.sh
 ```
+
+### 可选：多个样本并行运行（STAR shared memory）
+
+如果你已经预加载了 STAR genome index，并准备好了一个样本列表文件（每行一个样本名），可以执行：
+
+```bash
+bash ${PROJECT_ROOT}/00script/05_analysis/run_prism_samples_parallel_with_star_shared_memory.sh sample_list.txt
+```
+
+该脚本会自动为每个样本设置：
+
+```bash
+STAR_GENOME_LOAD=LoadAndKeep
+```
+
+并按 `MAX_PARALLEL` 控制并发数。
 
 ## 8. 提取真菌结果
 
