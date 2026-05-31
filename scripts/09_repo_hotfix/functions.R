@@ -201,15 +201,17 @@ prism_kraken <- function(sample,
   
   #---- filter the Kraken output for only microbial reads ----
   id_file <- paste0(out_prefix, '.kraken.microbiome.ids.txt')
+  taxid_file <- paste0(out_prefix, '.kraken.remove.taxids.txt')
   taxids_to_remove = c(0,1, setdiff(kr2$V7, kr2$V7[n])) # remove nonmicrobial Kraken reads
+
+  writeLines(as.character(taxids_to_remove), taxid_file)
   
   # Use one awk pass to write only read IDs for downstream FASTQ extraction.
-  # We intentionally do not materialize a large microbiome output text file,
-  # since only the read IDs are needed for the next step.
+  # Instead of a very large regex alternation, load taxids into an awk hash table
+  # and test membership per record. This is typically faster on very large files.
   awk_cmd <- sprintf(
-    "awk -F '\\t' '$3 !~ /(%s)/ {print $2 >> %s}' %s",
-    paste0('\\(taxid ', taxids_to_remove, '\\)', collapse='|'),
-    shQuote(id_file), shQuote(kraken_out)
+    "LC_ALL=C awk -v outfile=%s 'BEGIN{FS=\"\\t\"} FNR==NR {drop[$1]=1; next} {t=$3; gsub(/.*\\(taxid /, \"\", t); gsub(/\\).*/, \"\", t); if (!(t in drop)) print $2 >> outfile}' %s %s",
+    shQuote(id_file), shQuote(taxid_file), shQuote(kraken_out)
   )
   code <- system(awk_cmd, ignore.stderr = TRUE)
   if (code != 0L) stop("awk filtering failed (exit code ", code, ")")
@@ -265,6 +267,7 @@ prism_kraken <- function(sample,
   
   # delete temporary microbiome ids txt file
   system(paste0('rm ', out_path, sample, '.kraken.microbiome.ids.txt'))
+  system(paste0('rm ', out_path, sample, '.kraken.remove.taxids.txt'))
   
   # Return the MPA table and the filtered Kraken report
   list(mpa = mpa, kr_report = kr2, taxid = sp_taxids)
