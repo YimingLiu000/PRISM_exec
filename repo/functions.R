@@ -411,7 +411,6 @@ prism_minimap = function(sample,
 #' @param star_genome_dir String. Full path to the STAR genome index directory.
 #' @param star_genome_load String. STAR `--genomeLoad` mode, e.g. `NoSharedMemory`, `LoadAndKeep`.
 #' @param paired Logical. `TRUE` if paired-end FASTA files (`_1.fa` and `_2.fa`) are present.
-#' @param id_df Data frame. Contains read IDs in column `id`, used to annotate with a `star` flag.
 
 prism_star = function(sample,
                       out_path,
@@ -419,7 +418,6 @@ prism_star = function(sample,
                       star_genome_dir,
                       star_genome_load,
                       paired,
-                      id_df,
                       fa1,
                       fa2) {
   
@@ -504,7 +502,6 @@ prism_star = function(sample,
   
   #— identify mapped reads (FLAG &4 means unmapped → keep; so mapped = bitwAnd(flag,4)==0) —
   mapped_ids <- sam_df$V1[bitwAnd(sam_df$V2, 4) == 0]
-  # id_df$star <- ifelse(id_df$id %in% mapped_ids, 1, 0)
   
   #— subset to only unmapped reads and write back FASTA —
   fa1_keep <- fa1[ !(fa1_ids %in% mapped_ids) ]

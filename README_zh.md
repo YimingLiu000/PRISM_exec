@@ -11,6 +11,11 @@
 - 参考数据库与索引放在：`${PROJECT_ROOT}/02ref`
 - 运行输出放在：`${PROJECT_ROOT}/02fastq`
 
+补充说明：
+
+- `PRISM_linux_bundle/repo/` 现在直接包含了 `00script/repo/` 的源码副本
+- 复制时已经排除了 `.git` 等 git 元数据
+
 ## 先说明变量写法
 
 建议你先定义项目目录变量：
@@ -134,17 +139,7 @@ Kraken2 PR #1015 修复版安装脚本。
 作用总结：
 - 在旧服务器和新服务器之间迁移整个 PRISM 项目
 
-### 9. `09_repo_hotfix`
-用于保存需要手动同步回 PRISM 源码仓库的修复文件。
-
-包含：
-- `functions.R`
-  作用：包含 `kreport2mpa.py` 显式通过 `python3/python` 调用的修复版本
-
-作用总结：
-- 当源码仓库无法直接同步时，可手动用这里的修复文件覆盖 `${PROJECT_ROOT}/00script/repo/functions.R`
-
-### 10. `00script` 根目录中的其他脚本
+### 9. `00script` 根目录中的其他脚本
 
 当前 `00script` 根目录还保留了其他脚本：
 
