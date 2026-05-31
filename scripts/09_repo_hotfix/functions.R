@@ -200,28 +200,22 @@ prism_kraken <- function(sample,
   sp_taxids = kr$V7[str_detect(kr$V6, 'S')]
   
   #---- filter the Kraken output for only microbial reads ----
-  mic_out <- paste0(out_prefix, ".kraken.microbiome.output.txt")
+  id_file <- paste0(out_prefix, '.kraken.microbiome.ids.txt')
   taxids_to_remove = c(0,1, setdiff(kr2$V7, kr2$V7[n])) # remove nonmicrobial Kraken reads
   
-  # Use awk to drop any line whose taxid is in the “remove” list
+  # Use one awk pass to write only read IDs for downstream FASTQ extraction.
+  # We intentionally do not materialize a large microbiome output text file,
+  # since only the read IDs are needed for the next step.
   awk_cmd <- sprintf(
-    "awk -F '\t' '$3 !~ /(%s)/' %s >> %s",
+    "awk -F '\\t' '$3 !~ /(%s)/ {print $2 >> %s}' %s",
     paste0('\\(taxid ', taxids_to_remove, '\\)', collapse='|'),
-    kraken_out, mic_out
+    shQuote(id_file), shQuote(kraken_out)
   )
-  code <- system(awk_cmd)
+  code <- system(awk_cmd, ignore.stderr = TRUE)
   if (code != 0L) stop("awk filtering failed (exit code ", code, ")")
   
   # delete full kraken output file
   system(paste0('rm ', out_path, sample, '.kraken.output.txt'))
-  
-  #---- extract read IDs for downstream FASTA conversion ----
-  id_file <- paste0(out_prefix, '.kraken.microbiome.ids.txt')
-  cut_cmd <- paste(
-    "cut -d '\t' -f2", mic_out, ">", id_file
-  )
-  code <- system(cut_cmd)
-  if (code != 0L) stop("cut IDs failed (exit code ", code, ")")
   
   #---- pull microbial reads out of FASTQ and convert to FASTA ----
   
@@ -242,23 +236,29 @@ prism_kraken <- function(sample,
     tmp1 <- paste0(out_prefix, "_1.fq-temp")
     tmp2 <- paste0(out_prefix, "_2.fq-temp")
     
-    cmd1 <- paste(seqkit_path, "grep --pattern-file", shQuote(id_file), shQuote(f1), ">", shQuote(tmp1))
-    system(cmd1)
-    system(paste(seqkit_path, "fq2fa", shQuote(tmp1), ">", shQuote(paste0(out_prefix, "_1.fa"))))
+    cmd1 <- paste(seqkit_path, "grep -j", threads, "--pattern-file", shQuote(id_file), shQuote(f1), ">", shQuote(tmp1))
+    code <- system(cmd1, ignore.stderr = TRUE)
+    if (code != 0L) stop("seqkit grep read1 failed (exit code ", code, ")")
+    code <- system(paste(seqkit_path, "fq2fa", shQuote(tmp1), ">", shQuote(paste0(out_prefix, "_1.fa"))), ignore.stderr = TRUE)
+    if (code != 0L) stop("seqkit fq2fa read1 failed (exit code ", code, ")")
     file.remove(tmp1, f1)
     
-    cmd2 <- paste(seqkit_path, "grep --pattern-file", shQuote(id_file), shQuote(f2), ">", shQuote(tmp2))
-    system(cmd2)
-    system(paste(seqkit_path, "fq2fa", shQuote(tmp2), ">", shQuote(paste0(out_prefix, "_2.fa"))))
+    cmd2 <- paste(seqkit_path, "grep -j", threads, "--pattern-file", shQuote(id_file), shQuote(f2), ">", shQuote(tmp2))
+    code <- system(cmd2, ignore.stderr = TRUE)
+    if (code != 0L) stop("seqkit grep read2 failed (exit code ", code, ")")
+    code <- system(paste(seqkit_path, "fq2fa", shQuote(tmp2), ">", shQuote(paste0(out_prefix, "_2.fa"))), ignore.stderr = TRUE)
+    if (code != 0L) stop("seqkit fq2fa read2 failed (exit code ", code, ")")
     file.remove(tmp2, f2)
     
   } else {
     f1 <- paste0(out_prefix, ".fq")
     tmp1 <- paste0(out_prefix, "_1.fq-temp")
     
-    cmd1 <- paste(seqkit_path, "grep --pattern-file", shQuote(id_file), shQuote(f1), ">", shQuote(tmp1))
-    system(cmd1)
-    system(paste(seqkit_path, "fq2fa", shQuote(tmp1), ">", shQuote(paste0(out_prefix, "_1.fa"))))
+    cmd1 <- paste(seqkit_path, "grep -j", threads, "--pattern-file", shQuote(id_file), shQuote(f1), ">", shQuote(tmp1))
+    code <- system(cmd1, ignore.stderr = TRUE)
+    if (code != 0L) stop("seqkit grep single-end failed (exit code ", code, ")")
+    code <- system(paste(seqkit_path, "fq2fa", shQuote(tmp1), ">", shQuote(paste0(out_prefix, "_1.fa"))), ignore.stderr = TRUE)
+    if (code != 0L) stop("seqkit fq2fa single-end failed (exit code ", code, ")")
     file.remove(tmp1, f1)
   }
   
@@ -406,6 +406,7 @@ prism_minimap = function(sample,
 #' @param out_path String. Directory where `<sample>_1.fa` (and optionally `<sample>_2.fa`) are located.
 #' @param star_path String. Full path to the STAR executable.
 #' @param star_genome_dir String. Full path to the STAR genome index directory.
+#' @param star_genome_load String. STAR `--genomeLoad` mode, e.g. `NoSharedMemory`, `LoadAndKeep`.
 #' @param paired Logical. `TRUE` if paired-end FASTA files (`_1.fa` and `_2.fa`) are present.
 #' @param id_df Data frame. Contains read IDs in column `id`, used to annotate with a `star` flag.
 
@@ -413,6 +414,7 @@ prism_star = function(sample,
                       out_path,
                       star_path,
                       star_genome_dir,
+                      star_genome_load,
                       paired,
                       id_df,
                       fa1,
@@ -443,6 +445,7 @@ prism_star = function(sample,
     paste(
       star_path,
       "--genomeDir", shQuote(star_genome_dir),
+      "--genomeLoad", shQuote(star_genome_load),
       "--outFileNamePrefix", shQuote(prefix),
       "--readFilesIn",
       shQuote(fa1_path), shQuote(fa2_path)
@@ -451,6 +454,7 @@ prism_star = function(sample,
     paste(
       star_path,
       "--genomeDir", shQuote(star_genome_dir),
+      "--genomeLoad", shQuote(star_genome_load),
       "--outFileNamePrefix", shQuote(prefix),
       "--readFilesIn", shQuote(fa1_path)
     )
