@@ -97,6 +97,8 @@ PRISM 分析与真菌结果提取。
 包含：
 - `run_prism_rnaseq_test.sh`
   作用：基于准备好的数据库与索引运行 PRISM 测试流程
+- `run_prism_repo_testdata.sh`
+  作用：使用 PRISM 仓库自带 `repo/test data/D18.fa` 做小型测试，将 FASTA 临时转换为 FASTQ 后调用当前 PRISM 资源与主流程
 - `run_prism_samples_parallel_with_star_shared_memory.sh`
   作用：在 STAR shared memory 模式下按并发数调度多个样本并行运行
 - `extract_fungal_abundance.R`
@@ -104,6 +106,7 @@ PRISM 分析与真菌结果提取。
 
 作用总结：
 - 调用 PRISM 主流程
+- 使用仓库自带测试数据快速验证当前环境、数据库和索引是否能跑通 PRISM
 - 对最终结果做真菌专门提取
 - 支持在预加载宿主索引后进行多样本并行调度
 
