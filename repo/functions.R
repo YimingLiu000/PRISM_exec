@@ -216,8 +216,8 @@ prism_kraken <- function(sample,
   code <- system(awk_cmd, ignore.stderr = TRUE)
   if (code != 0L) stop("awk filtering failed (exit code ", code, ")")
   
-  # delete full kraken output file
-  system(paste0('rm ', out_path, sample, '.kraken.output.txt'))
+  # Keep the full Kraken output because downstream profiling parses its k-mer
+  # taxonomy assignments in prism_misclass_kmertax().
   
   #---- pull microbial reads out of FASTQ and convert to FASTA ----
   
@@ -1268,13 +1268,76 @@ prism_multimapping_ratios = function(blast){
 #' @param prod Data frame or tibble containing at least the columns:
 #' \code{staxids} (taxonomic ID), \code{gene}, and \code{product}.
 
+prism_annotation_diversity <- function(x) {
+  x <- unlist(x, use.names = FALSE)
+  if (length(x) == 0) {
+    return(0)
+  }
+
+  x <- as.character(x)
+  x <- iconv(x, from = "", to = "UTF-8", sub = "")
+  x <- trimws(x)
+  x <- x[!is.na(x) & nzchar(x)]
+  if (length(x) == 0) {
+    return(0)
+  }
+
+  counts <- as.numeric(table(x))
+  if (length(counts) == 0 || sum(counts) == 0) {
+    return(0)
+  }
+
+  p <- counts / sum(counts)
+  p <- p[p > 0]
+  as.numeric(-sum(p * log(p)))
+}
+
+prism_annotation_unique_count <- function(x) {
+  x <- unlist(x, use.names = FALSE)
+  if (length(x) == 0) {
+    return(0)
+  }
+
+  x <- as.character(x)
+  x <- iconv(x, from = "", to = "UTF-8", sub = "")
+  x <- trimws(x)
+  x <- x[!is.na(x) & nzchar(x)]
+  length(unique(x))
+}
+
+prism_normalize_by_total <- function(x) {
+  total <- sum(x, na.rm = TRUE)
+  if (is.na(total) || total == 0) {
+    return(rep(0, length(x)))
+  }
+  x / total
+}
+
 prism_genbank_stats = function(prod){
   prod %>% group_by(staxids) %>% 
-    summarize(fprod = n(), fugene = length(unique(gene)), fuprod = length(unique(product)),
-              prod_div = product %>% table() %>% vegan::diversity() %>% mean(),
-              gene_div = gene %>% table() %>% vegan::diversity() %>% mean(),
+    summarize(fprod = n(), fugene = prism_annotation_unique_count(gene), fuprod = prism_annotation_unique_count(product),
+              prod_div = prism_annotation_diversity(product),
+              gene_div = prism_annotation_diversity(gene),
               .groups = 'drop') %>% 
-    mutate(fprod = fprod/sum(fprod), fugene = fugene/sum(fugene), fuprod = fuprod/sum(fuprod)) 
+    mutate(
+      fprod = prism_normalize_by_total(fprod),
+      fugene = prism_normalize_by_total(fugene),
+      fuprod = prism_normalize_by_total(fuprod)
+    ) 
+}
+
+
+prism_parse_kmer_counts <- function(kmer_string) {
+  if (length(kmer_string) == 0 || is.na(kmer_string)) {
+    return(data.frame(taxid = numeric(), n = numeric()))
+  }
+
+  data.frame(pos = strsplit(as.character(kmer_string), '\\s') %>% unlist(), stringsAsFactors = F) %>%
+    dplyr::filter(nzchar(pos)) %>%
+    tidyr::separate(pos, into = c('taxid', 'nkmer'), sep = ':', convert = T, fill = 'right') %>%
+    dplyr::filter(!is.na(taxid), !is.na(nkmer)) %>%
+    dplyr::group_by(taxid) %>%
+    dplyr::summarize(n = sum(nkmer, na.rm = TRUE), .groups = 'drop')
 }
 
 
@@ -1301,15 +1364,28 @@ prism_misclass_kmertax = function(out_path, sample, kr_report, blast){
   # Get unique staxids from the `prod` object
   tx = unique(blast$staxids)
   
-  # Find the output file that contains kmer info
-  out = list.files(out_path, full.names = T) %>% str_subset('output.txt')
+  # Find the Kraken output file that contains k-mer taxonomy assignments.
+  out = file.path(out_path, paste0(sample, '.kraken.output.txt'))
+  if (!file.exists(out)) {
+    stop(
+      "Missing Kraken2 output required for PRISM profiling: ", out,
+      ". Re-run Kraken2 for this sample so the .kraken.output.txt file is regenerated."
+    )
+  }
+  tempout = file.path(out_path, paste0(sample, '.tempout.txt'))
+  if (file.exists(tempout)) {
+    file.remove(tempout)
+  }
   
   # Construct awk command to extract lines matching the relevant taxids from the output file
-  str = paste0("awk -F '\t' '$3 ~ /", paste0('\\(taxid ', tx, '\\)', collapse = '|'), "/' ", out, ' >> ', out_path, sample, '.tempout.txt')
-  system(str)  # Run the awk command
+  str = paste0("awk -F '\t' '$3 ~ /", paste0('\\(taxid ', tx, '\\)', collapse = '|'), "/' ", shQuote(out), ' > ', shQuote(tempout))
+  code = system(str)  # Run the awk command
+  if (code != 0L) {
+    stop("awk filtering failed while building k-mer taxonomy input for PRISM profiling (exit code ", code, ").")
+  }
   
   # Read the filtered output file into R
-  out = read.delim(paste0(out_path, sample, '.tempout.txt'), header = F)
+  out = read.delim(tempout, header = F)
   
   # Clean and reformat output for further analysis
   microbiome_output_file = out %>% 
@@ -1385,25 +1461,35 @@ prism_misclass_kmertax = function(out_path, sample, kr_report, blast){
     df.list = list()
     
     # Loop through each read
-    for(i in 1:nrow(out)){
+    if(nrow(out) == 0){
+      li[[as.character(taxa)]] = data.frame(
+        taxid = taxa,
+        unclassified = 0,
+        host = 0,
+        unrelated = 0,
+        k = 0,
+        p = 0,
+        c = 0,
+        o = 0,
+        f = 0,
+        g = 0,
+        s = 0
+      )
+      next
+    }
+
+    for(i in seq_len(nrow(out))){
       
       # Parse and summarize kmer hits from both r1 and r2 regions
-      r = data.frame(pos = out[['r1']][i] %>% strsplit('\\s') %>% unlist(), stringsAsFactors = F) %>% 
-        separate(pos, into = c('taxid', 'nkmer'), sep = ':', convert = T, fill = 'right')  %>% 
-        group_by(taxid) %>% 
-        summarize(n = sum(nkmer), .groups = 'drop') %>% 
-        na.omit() %>% 
-        rbind(data.frame(pos = out[['r2']][i] %>% strsplit('\\s') %>% unlist(), stringsAsFactors = F) %>% 
-                separate(pos, into = c('taxid', 'nkmer'), sep = ':', convert = T, fill = 'right')  %>% 
-                group_by(taxid) %>% 
-                summarize(n = sum(nkmer), .groups = 'drop') %>% 
-                na.omit()
-        ) %>% 
-        group_by(taxid) %>% 
-        summarize(n = sum(n), .groups = 'drop') %>%
-        mutate(taxid = as.character(taxid)) %>% 
-        drop_na() %>% 
-        left_join(d, by = 'taxid') 
+      r = dplyr::bind_rows(
+        prism_parse_kmer_counts(out[['r1']][i]),
+        prism_parse_kmer_counts(out[['r2']][i])
+      ) %>%
+        dplyr::group_by(taxid) %>% 
+        dplyr::summarize(n = sum(n, na.rm = TRUE), .groups = 'drop') %>%
+        dplyr::filter(!is.na(taxid), !is.na(n)) %>%
+        dplyr::mutate(taxid = as.character(taxid)) %>% 
+        dplyr::left_join(d, by = 'taxid') 
       
       # Annotate special cases: unclassified, human, unrelated
       if(0 %in% r$taxid){r$rank[r$taxid == 0] = 'unclassified'}
@@ -1432,18 +1518,25 @@ prism_misclass_kmertax = function(out_path, sample, kr_report, blast){
     }
     
     # Aggregate all read-level summaries for the taxid
-    li[[as.character(taxa)]] = bind_rows(df.list) %>% 
-      group_by(taxid) %>% 
-      summarize_if(.predicate = is.numeric, sum) %>% 
-      bind_rows()
+    li[[as.character(taxa)]] = dplyr::bind_rows(df.list) %>% 
+      dplyr::group_by(taxid) %>% 
+      dplyr::summarize_if(.predicate = is.numeric, .funs = sum) %>% 
+      dplyr::bind_rows()
   }
   
   # Clean up temporary file
-  system(paste0('rm ',  out_path, sample, '.tempout.txt'))
+  if (file.exists(tempout)) {
+    file.remove(tempout)
+  }
   
   # Combine all summaries into final outputs
   li = bind_rows(li) %>% arrange(taxid) %>% mutate(taxid = as.character(taxid)) %>% rename(staxids = taxid)
-  li = li %>% pivot_longer(-c(staxids)) %>% group_by(staxids) %>% mutate(value = value/sum(value)) %>% pivot_wider(id_cols = c(staxids), names_from = name, values_from = value) %>% ungroup()      
+  li = li %>%
+    pivot_longer(-c(staxids)) %>%
+    group_by(staxids) %>%
+    mutate(value = prism_normalize_by_total(value)) %>%
+    pivot_wider(id_cols = c(staxids), names_from = name, values_from = value) %>%
+    ungroup()
   
   misclass = bind_rows(misclass) %>% pivot_longer(-c(taxid, rank)) %>% group_by(taxid, name) %>% 
     mutate(value = value/value[rank == 'k']) %>% subset(rank != 'k') %>% 
@@ -1528,8 +1621,11 @@ prism_profile = function(out_path, sample, kr_report, blast, prod){
   feature_mat = reduce(list(div, multimap, ktax, misclass, krcounts), full_join, by = 'staxids')
   
   # load xgboost contamination model and predict
+  if (!requireNamespace("xgboost", quietly = TRUE)) {
+    stop("R package xgboost is required for PRISM prediction.")
+  }
   xg = readRDS(file = paste0(prism_path, 'prismxg.RDS'))
-  pred = suppressMessages(predict(xg, feature_mat %>% dplyr::select(xg$feature_names) %>% mutate_all(~ replace(., is.infinite(.), NA)) %>% as.matrix()))
+  pred = suppressMessages(stats::predict(xg, feature_mat %>% dplyr::select(xg$feature_names) %>% mutate_all(~ replace(., is.infinite(.), NA)) %>% as.matrix()))
   
   # make species counts file 
   counts = prod %>% 

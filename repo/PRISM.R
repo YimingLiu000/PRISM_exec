@@ -3,6 +3,7 @@ suppressMessages(library(ShortRead))
 suppressMessages(library(tidyverse))
 suppressMessages(library(furrr))
 suppressMessages(library(data.table))
+suppressMessages(library(xgboost))
 
 # ---------- Options ----------
 option_list = list(
@@ -101,7 +102,9 @@ log_message("Starting PRISM pipeline")
 
 # ------- Step 1 ------- 
 # ------- Initial Kraken2 host depletion, microbial surveillance, and putative microbial read extraction
-if (!file.exists(file.path(out_path, paste0(sample, ".kraken.report.txt")))) {
+kraken_report_file <- file.path(out_path, paste0(sample, ".kraken.report.txt"))
+kraken_output_file <- file.path(out_path, paste0(sample, ".kraken.output.txt"))
+if (!file.exists(kraken_report_file) || !file.exists(kraken_output_file)) {
   out <- run_step("Kraken2 analysis", quote(
     prism_kraken(sample, data_path, kraken_path, kraken_db_path, seqkit_path,
                  out_path, kraken_extra_opts, min_read_per, min_uniq_frac, paired,
