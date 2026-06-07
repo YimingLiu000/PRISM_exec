@@ -95,20 +95,22 @@ BLAST / core_nt 数据库下载、解压与 map 生成。
 PRISM 分析与真菌结果提取。
 
 包含：
+- `run_prism_rnaseq.sh`
+  作用：对单个真实 RNA-seq 样本运行 PRISM；会检查依赖和数据库路径，将 `${PROJECT_ROOT}/01rawdata` 中的成对 `.fastq.gz` 解压到 `${PROJECT_ROOT}/02fastq`，然后调用 PRISM 主流程。
 - `run_prism_rnaseq_test.sh`
   作用：基于准备好的数据库与索引运行 PRISM 测试流程
 - `run_prism_repo_testdata.sh`
   作用：使用 PRISM 仓库自带 `repo/test data/D18.fa` 做小型测试，将 FASTA 临时转换为 FASTQ 后调用当前 PRISM 资源与主流程
 - `run_prism_samples_parallel_with_star_shared_memory.sh`
-  作用：在 STAR shared memory 模式下按并发数调度多个样本并行运行
+  作用：读取样本列表，按 `MAX_PARALLEL` 控制并发数，逐个调用 `run_prism_rnaseq.sh`，并在 STAR shared memory 模式下调度多个样本并行运行
 - `extract_fungal_abundance.R`
   作用：从 PRISM 最终结果中提取真菌 read、物种汇总和最终 FASTA
 
 作用总结：
-- 调用 PRISM 主流程
+- 对单个真实 RNA-seq 样本调用 PRISM 主流程
 - 使用仓库自带测试数据快速验证当前环境、数据库和索引是否能跑通 PRISM
 - 对最终结果做真菌专门提取
-- 支持在预加载宿主索引后进行多样本并行调度
+- 支持在预加载宿主索引后进行多样本并行调度；并行时每个样本独立输出到 `${PROJECT_ROOT}/02fastq/<sample>_prism`
 
 ### 6. `06_docs`
 中文说明文档。
@@ -367,11 +369,67 @@ bash ${PROJECT_ROOT}/00script/check_prism_required_data.sh
 
 ## 7. 运行 PRISM
 
+### 7.1 单个真实 RNA-seq 样本
+
+正式运行真实 RNA-seq 样本时，建议使用：
+
+```bash
+bash ${PROJECT_ROOT}/00script/05_analysis/run_prism_rnaseq.sh FUSCCTNBC001
+```
+
+也可以通过环境变量传入样本名：
+
+```bash
+SAMPLE=FUSCCTNBC001 bash ${PROJECT_ROOT}/00script/05_analysis/run_prism_rnaseq.sh
+```
+
+默认情况下，脚本会读取：
+
+```bash
+${PROJECT_ROOT}/01rawdata/FUSCCTNBC001_RNAseq_R1.fastq.gz
+${PROJECT_ROOT}/01rawdata/FUSCCTNBC001_RNAseq_R2.fastq.gz
+```
+
+并解压生成：
+
+```bash
+${PROJECT_ROOT}/02fastq/FUSCCTNBC001_RNAseq_R1.fastq
+${PROJECT_ROOT}/02fastq/FUSCCTNBC001_RNAseq_R2.fastq
+```
+
+PRISM 输出目录为：
+
+```bash
+${PROJECT_ROOT}/02fastq/FUSCCTNBC001_prism
+```
+
+主要结果文件为：
+
+```bash
+${PROJECT_ROOT}/02fastq/FUSCCTNBC001_prism/FUSCCTNBC001-counts.csv
+${PROJECT_ROOT}/02fastq/FUSCCTNBC001_prism/FUSCCTNBC001-results.csv
+${PROJECT_ROOT}/02fastq/FUSCCTNBC001_prism/data/FUSCCTNBC001_PRISM.log
+```
+
+如果你的输入文件后缀不是 `_RNAseq_R1.fastq.gz` / `_RNAseq_R2.fastq.gz`，可以在运行前覆盖：
+
+```bash
+export FQ1_END="_R1.fastq"
+export FQ2_END="_R2.fastq"
+bash ${PROJECT_ROOT}/00script/05_analysis/run_prism_rnaseq.sh FUSCCTNBC001
+```
+
+这里的规则是：脚本会寻找 `${SAMPLE}${FQ1_END}.gz` 和 `${SAMPLE}${FQ2_END}.gz`。
+
+### 7.2 测试运行
+
+如果只是想用测试脚本验证数据库、索引和环境是否能跑通，可以执行：
+
 ```bash
 bash ${PROJECT_ROOT}/00script/05_analysis/run_prism_rnaseq_test.sh
 ```
 
-### Kraken2 额外参数说明
+### 7.3 Kraken2 额外参数说明
 
 当前运行脚本默认会给 Kraken2 加上：
 
@@ -390,38 +448,138 @@ export KRAKEN2_EXTRA_OPTS="--memory-mapping"
 然后再执行：
 
 ```bash
-bash ${PROJECT_ROOT}/00script/05_analysis/run_prism_rnaseq_test.sh
+bash ${PROJECT_ROOT}/00script/05_analysis/run_prism_rnaseq.sh FUSCCTNBC001
 ```
 
 如果你想关闭默认的内存映射，也可以设为空：
 
 ```bash
 export KRAKEN2_EXTRA_OPTS=""
-bash ${PROJECT_ROOT}/00script/05_analysis/run_prism_rnaseq_test.sh
+bash ${PROJECT_ROOT}/00script/05_analysis/run_prism_rnaseq.sh FUSCCTNBC001
 ```
 
 如果你想在 `--memory-mapping` 基础上再追加其它 Kraken2 参数，也可以这样写：
 
 ```bash
 export KRAKEN2_EXTRA_OPTS="--memory-mapping --quick"
-bash ${PROJECT_ROOT}/00script/05_analysis/run_prism_rnaseq_test.sh
+bash ${PROJECT_ROOT}/00script/05_analysis/run_prism_rnaseq.sh FUSCCTNBC001
 ```
 
-### 可选：多个样本并行运行（STAR shared memory）
+### 7.4 多个样本并行运行（STAR shared memory）
 
-如果你已经预加载了 STAR genome index，并准备好了一个样本列表文件（每行一个样本名），可以执行：
+多样本并行运行时，推荐保持 PRISM 主流程为“单样本一次运行”，由外层脚本读取样本列表并调度多个样本。并行脚本会逐个调用：
 
 ```bash
-bash ${PROJECT_ROOT}/00script/05_analysis/run_prism_samples_parallel_with_star_shared_memory.sh sample_list.txt
+${PROJECT_ROOT}/00script/05_analysis/run_prism_rnaseq.sh
 ```
 
-该脚本会自动为每个样本设置：
+#### 7.4.1 准备样本列表
+
+样本列表每行写一个样本名前缀，不写 FASTQ 后缀。空行和以 `#` 开头的注释行会被忽略。
+
+```bash
+cat > sample_list.txt <<EOF
+FUSCCTNBC001
+FUSCCTNBC002
+FUSCCTNBC003
+EOF
+```
+
+每个样本默认需要对应以下输入文件：
+
+```bash
+${PROJECT_ROOT}/01rawdata/FUSCCTNBC001_RNAseq_R1.fastq.gz
+${PROJECT_ROOT}/01rawdata/FUSCCTNBC001_RNAseq_R2.fastq.gz
+```
+
+如果你的文件后缀不同，可以在并行运行前统一设置：
+
+```bash
+export FQ1_END="_R1.fastq"
+export FQ2_END="_R2.fastq"
+```
+
+#### 7.4.2 建议先做单样本验证
+
+正式并行前，建议先挑一个样本确认输入、数据库、软件路径和 PRISM 主流程都正常：
+
+```bash
+bash ${PROJECT_ROOT}/00script/05_analysis/run_prism_rnaseq.sh FUSCCTNBC001
+```
+
+#### 7.4.3 预加载 STAR shared memory
+
+如果希望多个并行 STAR 进程复用同一份宿主 genome index，先执行：
+
+```bash
+bash ${PROJECT_ROOT}/00script/04_host/star_shared_memory_control.sh load
+```
+
+并行脚本会自动为每个样本设置：
 
 ```bash
 STAR_GENOME_LOAD=LoadAndKeep
 ```
 
-并按 `MAX_PARALLEL` 控制并发数。
+因此单个样本进入 STAR 步骤时会复用已经加载到 shared memory 的索引。
+
+#### 7.4.4 设置并发数和线程数
+
+`MAX_PARALLEL` 控制同时运行多少个样本，`PRISM_THREADS` 控制每个样本内部传给 Kraken2 / Minimap2 / BLAST 等工具的线程数。
+
+建议先保守运行：
+
+```bash
+export MAX_PARALLEL=2
+export PRISM_THREADS=8
+export KRAKEN2_EXTRA_OPTS="--memory-mapping"
+export USE_CUSTOM_DB=FALSE
+```
+
+总线程压力大致可以按下面估算：
+
+```bash
+MAX_PARALLEL × PRISM_THREADS
+```
+
+如果服务器内存、CPU 和磁盘 I/O 都稳定，再逐步提高 `MAX_PARALLEL` 或 `PRISM_THREADS`。
+
+#### 7.4.5 启动并行运行
+
+```bash
+bash ${PROJECT_ROOT}/00script/05_analysis/run_prism_samples_parallel_with_star_shared_memory.sh sample_list.txt
+```
+
+如果有样本失败，脚本会在最后返回非零退出码，并提示对应样本日志。
+
+#### 7.4.6 运行结束后释放 STAR shared memory
+
+所有并行任务结束后，执行：
+
+```bash
+bash ${PROJECT_ROOT}/00script/04_host/star_shared_memory_control.sh remove
+```
+
+#### 7.4.7 查看结果和日志
+
+每个样本的最终结果位于：
+
+```bash
+${PROJECT_ROOT}/02fastq/<sample>_prism/<sample>-counts.csv
+${PROJECT_ROOT}/02fastq/<sample>_prism/<sample>-results.csv
+```
+
+每个样本的 PRISM 主流程日志位于：
+
+```bash
+${PROJECT_ROOT}/02fastq/<sample>_prism/data/<sample>_PRISM.log
+```
+
+并行调度脚本的样本级日志位于：
+
+```bash
+${PROJECT_ROOT}/02fastq/parallel_logs/<sample>.log
+```
 
 ## 8. 提取真菌结果
 
