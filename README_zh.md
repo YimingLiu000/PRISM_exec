@@ -103,6 +103,8 @@ PRISM 分析与真菌结果提取。
   作用：使用 PRISM 仓库自带 `repo/test data/D18.fa` 做小型测试，将 FASTA 临时转换为 FASTQ 后调用当前 PRISM 资源与主流程
 - `run_prism_samples_parallel_with_star_shared_memory.sh`
   作用：读取样本列表，按 `MAX_PARALLEL` 控制并发数，逐个调用 `run_prism_rnaseq.sh`，并在 STAR shared memory 模式下调度多个样本并行运行
+- `run_prism_samples_parallel_with_serial_kraken2.sh`
+  作用：读取样本列表，启动多个可重叠的 PRISM 样本任务，但通过全局 `flock` 锁保证同一时间只有一个样本执行 Kraken2；适合 `KRAKEN2_EXTRA_OPTS=""`、Kraken2 数据库完整加载到内存且服务器内存只能容纳一个 Kraken2 数据库的场景
 - `extract_fungal_abundance.R`
   作用：从 PRISM 最终结果中提取真菌 read、物种汇总和最终 FASTA
 
@@ -111,6 +113,7 @@ PRISM 分析与真菌结果提取。
 - 使用仓库自带测试数据快速验证当前环境、数据库和索引是否能跑通 PRISM
 - 对最终结果做真菌专门提取
 - 支持在预加载宿主索引后进行多样本并行调度；并行时每个样本独立输出到 `${PROJECT_ROOT}/02fastq/<sample>_prism`
+- 支持多样本重叠运行但 Kraken2 串行执行，使 Kraken2 充分加载内存运行，同时让前一个样本的下游步骤和后一个样本的 Kraken2 步骤衔接起来
 
 ### 6. `06_docs`
 中文说明文档。
@@ -579,6 +582,175 @@ ${PROJECT_ROOT}/02fastq/<sample>_prism/data/<sample>_PRISM.log
 
 ```bash
 ${PROJECT_ROOT}/02fastq/parallel_logs/<sample>.log
+```
+
+### 7.5 多个样本重叠运行，但 Kraken2 串行执行
+
+如果服务器内存只能容纳一个完整加载的 Kraken2 数据库，但你又希望 Kraken2 不使用 `--memory-mapping`、而是完整加载到内存以提高分类速度，推荐使用：
+
+```bash
+${PROJECT_ROOT}/00script/05_analysis/run_prism_samples_parallel_with_serial_kraken2.sh
+```
+
+这个脚本的调度逻辑是：
+
+1. 多个样本的 PRISM 进程可以重叠存在。
+2. 所有样本共用一个 Kraken2 锁，同一时间只有一个样本真正执行 Kraken2。
+3. 第一个样本完成 Kraken2 后会继续运行 Minimap2、STAR、BLAST 和后续 PRISM profiling。
+4. 第二个样本会在第一个样本 Kraken2 结束后立即获得锁并开始 Kraken2。
+
+这样可以避免多个 Kraken2 同时加载数据库导致内存不足，同时减少 Kraken2 步骤之间的空窗时间。
+
+#### 7.5.1 准备样本列表
+
+样本列表每行写一个样本名前缀，不写 FASTQ 后缀。空行和以 `#` 开头的注释行会被忽略。
+
+```bash
+cat > sample_list.txt <<EOF
+FUSCCTNBC001
+FUSCCTNBC002
+FUSCCTNBC003
+EOF
+```
+
+每个样本默认需要对应以下输入文件：
+
+```bash
+${PROJECT_ROOT}/01rawdata/FUSCCTNBC001_RNAseq_R1.fastq.gz
+${PROJECT_ROOT}/01rawdata/FUSCCTNBC001_RNAseq_R2.fastq.gz
+```
+
+如果你的文件后缀不同，可以在运行前统一设置：
+
+```bash
+export FQ1_END="_R1.fastq"
+export FQ2_END="_R2.fastq"
+```
+
+#### 7.5.2 建议先做单样本验证
+
+正式重叠运行前，建议先挑一个样本确认输入、数据库、软件路径和 PRISM 主流程都正常：
+
+```bash
+bash ${PROJECT_ROOT}/00script/05_analysis/run_prism_rnaseq.sh FUSCCTNBC001
+```
+
+#### 7.5.3 预加载 STAR shared memory
+
+如果希望多个 STAR 进程复用同一份宿主 genome index，先执行：
+
+```bash
+bash ${PROJECT_ROOT}/00script/04_host/star_shared_memory_control.sh load
+```
+
+`run_prism_samples_parallel_with_serial_kraken2.sh` 默认会给每个样本设置：
+
+```bash
+STAR_GENOME_LOAD=LoadAndKeep
+```
+
+因此该脚本可以和 `star_shared_memory_control.sh load` 衔接使用。
+
+#### 7.5.4 设置 Kraken2 完整加载和重叠运行参数
+
+如果要让 Kraken2 完整加载数据库到内存，运行前设置：
+
+```bash
+export KRAKEN2_EXTRA_OPTS=""
+```
+
+推荐先使用下面的保守参数：
+
+```bash
+export PRISM_THREADS=16
+export MAX_ACTIVE_JOBS=4
+export KRAKEN2_QUEUE_DEPTH=2
+export USE_CUSTOM_DB=FALSE
+export KRAKEN2_EXTRA_OPTS=""
+```
+
+参数含义：
+
+- `PRISM_THREADS`：每个样本内部传给 PRISM 外部工具的线程数。
+- `MAX_ACTIVE_JOBS`：最多允许多少个 PRISM 样本进程同时存在。
+- `KRAKEN2_QUEUE_DEPTH`：保持多少个样本排在 Kraken2 前后，用来减少 Kraken2 空窗；默认 `2`。
+- `KRAKEN2_EXTRA_OPTS=""`：关闭 `--memory-mapping`，让 Kraken2 完整加载数据库。
+
+注意：Kraken2 本身由脚本加锁串行执行，所以不会因为 `MAX_ACTIVE_JOBS > 1` 而同时启动多个 Kraken2。
+
+#### 7.5.5 启动重叠运行
+
+```bash
+bash ${PROJECT_ROOT}/00script/05_analysis/run_prism_samples_parallel_with_serial_kraken2.sh sample_list.txt
+```
+
+如果有样本失败，脚本会在最后返回非零退出码，并提示对应样本日志。
+
+#### 7.5.6 运行结束后释放 STAR shared memory
+
+所有任务结束后，执行：
+
+```bash
+bash ${PROJECT_ROOT}/00script/04_host/star_shared_memory_control.sh remove
+```
+
+#### 7.5.7 查看结果和日志
+
+每个样本的最终结果位于：
+
+```bash
+${PROJECT_ROOT}/02fastq/<sample>_prism/<sample>-counts.csv
+${PROJECT_ROOT}/02fastq/<sample>_prism/<sample>-results.csv
+```
+
+每个样本的 PRISM 主流程日志位于：
+
+```bash
+${PROJECT_ROOT}/02fastq/<sample>_prism/data/<sample>_PRISM.log
+```
+
+重叠运行脚本的样本级日志位于：
+
+```bash
+${PROJECT_ROOT}/02fastq/serial_kraken2_logs/<run_id>/<sample>.log
+```
+
+日志中如果看到下面的信息，说明 Kraken2 串行锁正在生效：
+
+```bash
+[KRAKEN2-LOCK] <sample> waiting for Kraken2 lock
+[KRAKEN2-LOCK] <sample> acquired Kraken2 lock
+[KRAKEN2-LOCK] <sample> released Kraken2 lock
+```
+
+#### 7.5.8 换行符检查
+
+如果脚本从 Windows 同步到 Linux 后出现下面这类报错：
+
+```bash
+$'\r': command not found
+set: pipefail: invalid option name
+```
+
+说明 shell 脚本仍是 Windows CRLF 换行。请在服务器上执行：
+
+```bash
+dos2unix ${PROJECT_ROOT}/00script/05_analysis/run_prism_rnaseq.sh
+dos2unix ${PROJECT_ROOT}/00script/05_analysis/run_prism_samples_parallel_with_serial_kraken2.sh
+```
+
+如果服务器没有 `dos2unix`，可以用：
+
+```bash
+sed -i 's/\r$//' ${PROJECT_ROOT}/00script/05_analysis/run_prism_rnaseq.sh
+sed -i 's/\r$//' ${PROJECT_ROOT}/00script/05_analysis/run_prism_samples_parallel_with_serial_kraken2.sh
+```
+
+然后检查语法：
+
+```bash
+bash -n ${PROJECT_ROOT}/00script/05_analysis/run_prism_rnaseq.sh
+bash -n ${PROJECT_ROOT}/00script/05_analysis/run_prism_samples_parallel_with_serial_kraken2.sh
 ```
 
 ## 8. 提取真菌结果
