@@ -1,66 +1,57 @@
 #!/usr/bin/env bash
 
-# Stream PRISM RNA-seq samples from a remote storage server with rsync.
+# Stream PRISM RNA-seq samples from Baidu Netdisk with BaiduPCS-Go while
+# processing already downloaded samples. The download queue and PRISM compute
+# queue are independent: downloading keeps moving through the manifest and does
+# not wait for compute jobs to catch up. Only one Kraken2 process is allowed at a
+# time, and each sample's input FASTQ.GZ/FASTQ files are removed after that
+# sample finishes so PRISM result files are retained.
 #
-# This script deliberately separates the download queue from the compute queue:
-#   1. The download queue walks through the manifest in order and keeps syncing
-#      samples. It does not wait for PRISM computation to catch up.
-#   2. Each successfully downloaded sample is marked ready for computation.
-#   3. The compute queue starts PRISM jobs only for ready samples. If download is
-#      slower than compute, computation waits until the next sample is ready.
-#   4. Kraken2 is still serialized with a global flock lock, so only one sample
-#      can run Kraken2 at a time.
-#   5. After each sample finishes PRISM, only that sample's explicit input files
-#      are removed: two downloaded FASTQ.GZ files and two decompressed FASTQ
-#      files. Result directories are retained.
+# Baidu manifest format:
+#   one Baidu Netdisk sample directory or FASTQ.GZ path per line; blank lines
+#   and lines starting with # are ignored.
 #
-# Remote manifest format:
-#   one remote sample directory or FASTQ.GZ path per line; blank lines and lines
-#   starting with # are ignored.
-#
-# Example remote manifest:
-#   /data/rnaseq/FUSCCTNBC001
-#   /data/rnaseq/FUSCCTNBC002
+# Example Baidu manifest:
+#   /RNAseq/FUSCCTNBC001
+#   /RNAseq/FUSCCTNBC002
 # or:
-#   /data/rnaseq/FUSCCTNBC001/FUSCCTNBC001_RNAseq_R1.fastq.gz
-#   /data/rnaseq/FUSCCTNBC002/FUSCCTNBC002_RNAseq_R1.fastq.gz
+#   /RNAseq/FUSCCTNBC001/FUSCCTNBC001_RNAseq_R1.fastq.gz
+#   /RNAseq/FUSCCTNBC002/FUSCCTNBC002_RNAseq_R1.fastq.gz
 #
 # By default each remote directory must contain:
 #   <sample>_RNAseq_R1.fastq.gz
 #   <sample>_RNAseq_R2.fastq.gz
 #
 # Usage:
-#   bash run_prism_streaming_rsync_serial_kraken2.sh remote_sample_dirs.txt
-#
-# Required environment variables:
-#   RSYNC_REMOTE        Remote rsync prefix, for example user@host
+#   bash run_prism_streaming_baidupcs_serial_kraken2.sh baidu_sample_paths.txt
 #
 # Optional environment variables:
-#   PROJECT_ROOT        PRISM project root.
-#   RUN_SCRIPT          Single-sample PRISM runner. Default: run_prism_rnaseq.sh.
-#   RAW_DIR             Local staging directory for downloaded FASTQ.GZ files.
-#   FASTQ_DIR           Local FASTQ/output directory.
-#   FQ1_END             Read 1 suffix before .gz. Default: _RNAseq_R1.fastq
-#   FQ2_END             Read 2 suffix before .gz. Default: _RNAseq_R2.fastq
-#   RSYNC_SSH_PORT      SSH port. Default: 22.
-#   RSYNC_SSH_OPTS      Extra SSH options. Default: empty.
-#   RSYNC_OPTS          Extra rsync options. Default: -av --partial --append-verify
-#   PARALLEL_MATES      Download R1 and R2 for one sample concurrently. Default: TRUE.
-#   MAX_ACTIVE_JOBS     Maximum total PRISM jobs alive at once. Default: 3.
-#   KRAKEN2_QUEUE_DEPTH Number of ready jobs allowed before/across Kraken2. Default: 2.
-#   KRAKEN2_EXTRA_OPTS  Kraken2 extra options. Default here: empty string.
-#   STAR_GENOME_LOAD    STAR genomeLoad mode. Default: LoadAndKeep.
-#   POLL_SECONDS        Scheduler polling interval. Default: 5.
-#   LOG_DIR             Run log directory.
+#   PROJECT_ROOT              PRISM project root.
+#   RUN_SCRIPT                Single-sample PRISM runner. Default: run_prism_rnaseq.sh.
+#   BAIDUPCS                  BaiduPCS-Go executable. Default: sibling BaiduPCS-Go,
+#                             then PATH lookup.
+#   BAIDUPCS_DOWNLOAD_OPTS    Extra BaiduPCS-Go download options. Default: --ow.
+#                             Example: '-p 8 --retry 5'
+#   RAW_DIR                   Local staging directory for downloaded FASTQ.GZ files.
+#   FASTQ_DIR                 Local FASTQ/output directory.
+#   FQ1_END                   Read 1 suffix before .gz. Default: _RNAseq_R1.fastq
+#   FQ2_END                   Read 2 suffix before .gz. Default: _RNAseq_R2.fastq
+#   MAX_ACTIVE_JOBS           Maximum total PRISM jobs alive at once. Default: 3.
+#   KRAKEN2_QUEUE_DEPTH       Number of downloaded jobs to keep queued for Kraken2.
+#                             Default: 2.
+#   KRAKEN2_EXTRA_OPTS        Kraken2 extra options. Default here: empty string.
+#   STAR_GENOME_LOAD          STAR genomeLoad mode. Default: LoadAndKeep.
+#   POLL_SECONDS              Scheduler polling interval. Default: 5.
+#   LOG_DIR                   Run log directory.
 
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
-  echo "Usage: bash $0 <remote_sample_dirs.txt>"
+  echo "Usage: bash $0 <baidu_sample_paths.txt>"
   exit 1
 fi
 
-REMOTE_MANIFEST="$1"
+BAIDU_MANIFEST="$1"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -n "${PROJECT_ROOT:-}" ]]; then
@@ -73,17 +64,26 @@ else
   PROJECT_ROOT="${HOME}/PRISM"
 fi
 
-if [[ ! -f "${REMOTE_MANIFEST}" ]]; then
-  echo "[ERROR] Remote manifest file does not exist: ${REMOTE_MANIFEST}"
+if [[ ! -f "${BAIDU_MANIFEST}" ]]; then
+  echo "[ERROR] Baidu manifest file does not exist: ${BAIDU_MANIFEST}"
   exit 1
 fi
 
-if [[ -z "${RSYNC_REMOTE:-}" ]]; then
-  echo "[ERROR] RSYNC_REMOTE is required, for example: export RSYNC_REMOTE=user@host"
+if [[ -z "${BAIDUPCS:-}" ]]; then
+  if [[ -x "${SCRIPT_DIR}/BaiduPCS-Go" ]]; then
+    BAIDUPCS="${SCRIPT_DIR}/BaiduPCS-Go"
+  else
+    BAIDUPCS="$(command -v BaiduPCS-Go || true)"
+  fi
+fi
+
+if [[ -z "${BAIDUPCS}" || ! -x "${BAIDUPCS}" ]]; then
+  echo "[ERROR] Missing executable BaiduPCS-Go."
+  echo "        Put BaiduPCS-Go beside this script, or set BAIDUPCS=/path/to/BaiduPCS-Go."
   exit 1
 fi
 
-for exe in rsync ssh flock find awk; do
+for exe in flock find awk; do
   if ! command -v "${exe}" >/dev/null 2>&1; then
     echo "[ERROR] Missing executable: ${exe}"
     exit 1
@@ -113,14 +113,11 @@ RAW_DIR="${RAW_DIR:-${PROJECT_ROOT}/01rawdata}"
 FASTQ_DIR="${FASTQ_DIR:-${PROJECT_ROOT}/02fastq}"
 FQ1_END="${FQ1_END:-_RNAseq_R1.fastq}"
 FQ2_END="${FQ2_END:-_RNAseq_R2.fastq}"
-RSYNC_OPTS="${RSYNC_OPTS:--av --partial --append-verify}"
-RSYNC_SSH_PORT="${RSYNC_SSH_PORT:-22}"
-RSYNC_SSH_OPTS="${RSYNC_SSH_OPTS:-}"
-PARALLEL_MATES="${PARALLEL_MATES:-TRUE}"
+BAIDUPCS_DOWNLOAD_OPTS="${BAIDUPCS_DOWNLOAD_OPTS:---ow}"
 MAX_ACTIVE_JOBS="${MAX_ACTIVE_JOBS:-3}"
 KRAKEN2_QUEUE_DEPTH="${KRAKEN2_QUEUE_DEPTH:-2}"
 POLL_SECONDS="${POLL_SECONDS:-5}"
-LOG_DIR="${LOG_DIR:-${PROJECT_ROOT}/02fastq/streaming_rsync_serial_kraken2_logs}"
+LOG_DIR="${LOG_DIR:-${PROJECT_ROOT}/02fastq/streaming_baidupcs_serial_kraken2_logs}"
 RUN_ID="$(date +%Y%m%d_%H%M%S)_$$"
 RUN_DIR="${LOG_DIR}/${RUN_ID}"
 WRAPPER_DIR="${RUN_DIR}/wrapper"
@@ -128,12 +125,11 @@ KRAKEN2_EVENTS_DIR="${RUN_DIR}/kraken2_events"
 KRAKEN2_LOCK_FILE="${RUN_DIR}/kraken2.lock"
 LOCKED_KRAKEN2_BIN="${WRAPPER_DIR}/kraken2_locked.sh"
 DOWNLOAD_LOG_DIR="${RUN_DIR}/downloads"
-READY_DIR="${RUN_DIR}/download_ready"
+DONE_DIR="${RUN_DIR}/download_done"
 FAIL_DIR="${RUN_DIR}/download_failed"
-DOWNLOAD_QUEUE_DONE="${RUN_DIR}/download_queue.done"
 
 mkdir -p "${RAW_DIR}" "${FASTQ_DIR}" "${RUN_DIR}" "${WRAPPER_DIR}" \
-  "${KRAKEN2_EVENTS_DIR}" "${DOWNLOAD_LOG_DIR}" "${READY_DIR}" "${FAIL_DIR}"
+  "${KRAKEN2_EVENTS_DIR}" "${DOWNLOAD_LOG_DIR}" "${DONE_DIR}" "${FAIL_DIR}"
 
 cat > "${LOCKED_KRAKEN2_BIN}" <<'EOF'
 #!/usr/bin/env bash
@@ -194,7 +190,7 @@ while IFS= read -r remote_path || [[ -n "${remote_path}" ]]; do
   fi
 
   if [[ -z "${sample}" || "${sample}" == "." || "${sample}" == "/" ]]; then
-    echo "[ERROR] Cannot derive sample name from remote path: ${remote_path}"
+    echo "[ERROR] Cannot derive sample name from Baidu path: ${remote_path}"
     exit 1
   fi
 
@@ -204,10 +200,10 @@ while IFS= read -r remote_path || [[ -n "${remote_path}" ]]; do
   seen_samples="${seen_samples}${sample} "
   remote_dirs+=("${remote_dir%/}")
   samples+=("${sample}")
-done < "${REMOTE_MANIFEST}"
+done < "${BAIDU_MANIFEST}"
 
 if [[ "${#samples[@]}" -eq 0 ]]; then
-  echo "[ERROR] No remote sample directories found in: ${REMOTE_MANIFEST}"
+  echo "[ERROR] No Baidu sample directories found in: ${BAIDU_MANIFEST}"
   exit 1
 fi
 
@@ -215,39 +211,35 @@ safe_name() {
   printf '%s' "$1" | tr -c 'A-Za-z0-9_.-' '_'
 }
 
+kraken2_acquired_count() {
+  find "${KRAKEN2_EVENTS_DIR}" -maxdepth 1 -type f -name '*.acquired' | wc -l | awk '{print $1}'
+}
+
 is_running_pid() {
   local pid="$1"
   jobs -rp | awk -v target="${pid}" '$1 == target { found = 1 } END { exit(found ? 0 : 1) }'
 }
 
-kraken2_acquired_count() {
-  find "${KRAKEN2_EVENTS_DIR}" -maxdepth 1 -type f -name '*.acquired' | wc -l | awk '{print $1}'
+delete_file_if_present() {
+  local path="$1"
+  if [[ -f "${path}" ]]; then
+    echo "[CLEANUP] Removing file: ${path}"
+    rm -- "${path}"
+  fi
 }
 
-rsync_one_file() {
-  local remote_file="$1"
-  local local_file="$2"
-  local log_file="$3"
-  local ssh_cmd="ssh -p ${RSYNC_SSH_PORT} ${RSYNC_SSH_OPTS}"
-
-  # RSYNC_OPTS is intentionally split by the shell here so users can pass normal
-  # rsync option strings such as: -av --partial --append-verify --info=progress2
-  rsync ${RSYNC_OPTS} -e "${ssh_cmd}" "${remote_file}" "${local_file}" >>"${log_file}" 2>&1
+cleanup_sample_inputs() {
+  local sample="$1"
+  delete_file_if_present "${RAW_DIR}/${sample}${FQ1_END}.gz"
+  delete_file_if_present "${RAW_DIR}/${sample}${FQ2_END}.gz"
+  delete_file_if_present "${FASTQ_DIR}/${sample}${FQ1_END}"
+  delete_file_if_present "${FASTQ_DIR}/${sample}${FQ2_END}"
 }
 
 cleanup_partial_download() {
   local sample="$1"
-  local paths=(
-    "${RAW_DIR}/${sample}${FQ1_END}.gz"
-    "${RAW_DIR}/${sample}${FQ2_END}.gz"
-  )
-  local path
-  for path in "${paths[@]}"; do
-    if [[ -f "${path}" ]]; then
-      echo "[CLEANUP] Removing partial download: ${path}"
-      rm -- "${path}"
-    fi
-  done
+  delete_file_if_present "${RAW_DIR}/${sample}${FQ1_END}.gz"
+  delete_file_if_present "${RAW_DIR}/${sample}${FQ2_END}.gz"
 }
 
 download_sample() {
@@ -256,64 +248,31 @@ download_sample() {
   local remote_dir="${remote_dirs[$idx]}"
   local safe_sample
   safe_sample="$(safe_name "${sample}")"
-  local log_file="${DOWNLOAD_LOG_DIR}/${safe_sample}.rsync.log"
-  local remote_r1="${RSYNC_REMOTE}:${remote_dir}/${sample}${FQ1_END}.gz"
-  local remote_r2="${RSYNC_REMOTE}:${remote_dir}/${sample}${FQ2_END}.gz"
+  local log_file="${DOWNLOAD_LOG_DIR}/${safe_sample}.baidupcs.log"
+  local remote_r1="${remote_dir}/${sample}${FQ1_END}.gz"
+  local remote_r2="${remote_dir}/${sample}${FQ2_END}.gz"
   local local_r1="${RAW_DIR}/${sample}${FQ1_END}.gz"
   local local_r2="${RAW_DIR}/${sample}${FQ2_END}.gz"
-  local status1=0
-  local status2=0
 
   echo "[DOWNLOAD] ${sample}: ${remote_dir} -> ${RAW_DIR}" | tee -a "${log_file}"
 
   set +e
-  if [[ "${PARALLEL_MATES}" == "TRUE" || "${PARALLEL_MATES}" == "true" || "${PARALLEL_MATES}" == "1" ]]; then
-    rsync_one_file "${remote_r1}" "${local_r1}" "${log_file}" &
-    local pid1="$!"
-    rsync_one_file "${remote_r2}" "${local_r2}" "${log_file}" &
-    local pid2="$!"
-    wait "${pid1}"; status1=$?
-    wait "${pid2}"; status2=$?
-  else
-    rsync_one_file "${remote_r1}" "${local_r1}" "${log_file}"; status1=$?
-    rsync_one_file "${remote_r2}" "${local_r2}" "${log_file}"; status2=$?
-  fi
+  # shellcheck disable=SC2086
+  "${BAIDUPCS}" d ${BAIDUPCS_DOWNLOAD_OPTS} --saveto "${RAW_DIR}" "${remote_r1}" >>"${log_file}" 2>&1
+  local status1=$?
+  # shellcheck disable=SC2086
+  "${BAIDUPCS}" d ${BAIDUPCS_DOWNLOAD_OPTS} --saveto "${RAW_DIR}" "${remote_r2}" >>"${log_file}" 2>&1
+  local status2=$?
   set -e
 
   if [[ "${status1}" -eq 0 && "${status2}" -eq 0 && -f "${local_r1}" && -f "${local_r2}" ]]; then
-    touch "${READY_DIR}/${safe_sample}.ready"
-    echo "[DOWNLOAD-READY] ${sample}" | tee -a "${log_file}"
+    touch "${DONE_DIR}/${safe_sample}.done"
+    echo "[DOWNLOAD-DONE] ${sample}" | tee -a "${log_file}"
   else
     touch "${FAIL_DIR}/${safe_sample}.failed"
     echo "[DOWNLOAD-ERROR] ${sample}; check ${log_file}" | tee -a "${log_file}"
     cleanup_partial_download "${sample}"
   fi
-}
-
-download_queue() {
-  local idx
-  for idx in "${!samples[@]}"; do
-    download_sample "${idx}"
-  done
-  touch "${DOWNLOAD_QUEUE_DONE}"
-  echo "[DOWNLOAD-DONE] Download queue finished."
-}
-
-cleanup_sample_inputs() {
-  local sample="$1"
-  local paths=(
-    "${RAW_DIR}/${sample}${FQ1_END}.gz"
-    "${RAW_DIR}/${sample}${FQ2_END}.gz"
-    "${FASTQ_DIR}/${sample}${FQ1_END}"
-    "${FASTQ_DIR}/${sample}${FQ2_END}"
-  )
-  local path
-  for path in "${paths[@]}"; do
-    if [[ -f "${path}" ]]; then
-      echo "[CLEANUP] Removing file: ${path}"
-      rm -- "${path}"
-    fi
-  done
 }
 
 run_sample() {
@@ -345,30 +304,57 @@ run_sample() {
 }
 
 download_pid=""
-next_compute=0
+download_idx=-1
+next_download=0
+next_run=0
 launched_runs=0
-completed_items=0
+completed_runs=0
 failures=0
-download_queue_failed=0
 
 run_pids=()
 run_samples=()
 
+start_download_if_possible() {
+  if [[ -n "${download_pid}" ]]; then
+    return
+  fi
+  if [[ "${next_download}" -ge "${#samples[@]}" ]]; then
+    return
+  fi
+
+  download_idx="${next_download}"
+  download_sample "${download_idx}" &
+  download_pid="$!"
+  next_download=$((next_download + 1))
+}
+
+reap_download_if_done() {
+  if [[ -z "${download_pid}" ]]; then
+    return
+  fi
+  if is_running_pid "${download_pid}"; then
+    return
+  fi
+  wait "${download_pid}" || true
+  download_pid=""
+  download_idx=-1
+}
+
 launch_ready_runs() {
-  while [[ "${next_compute}" -lt "${#samples[@]}" ]]; do
-    local sample="${samples[$next_compute]}"
+  while [[ "${next_run}" -lt "${#samples[@]}" ]]; do
+    local sample="${samples[$next_run]}"
     local safe_sample
     safe_sample="$(safe_name "${sample}")"
 
     if [[ -f "${FAIL_DIR}/${safe_sample}.failed" ]]; then
-      echo "[ERROR] Download failed for ${sample}; skipping compute."
+      echo "[ERROR] Download failed for ${sample}; skipping run."
       failures=$((failures + 1))
-      completed_items=$((completed_items + 1))
-      next_compute=$((next_compute + 1))
+      completed_runs=$((completed_runs + 1))
+      next_run=$((next_run + 1))
       continue
     fi
 
-    if [[ ! -f "${READY_DIR}/${safe_sample}.ready" ]]; then
+    if [[ ! -f "${DONE_DIR}/${safe_sample}.done" ]]; then
       break
     fi
 
@@ -388,7 +374,7 @@ launch_ready_runs() {
     run_pids+=("$!")
     run_samples+=("${sample}")
     launched_runs=$((launched_runs + 1))
-    next_compute=$((next_compute + 1))
+    next_run=$((next_run + 1))
   done
 }
 
@@ -409,37 +395,18 @@ reap_finished_runs() {
         echo "[ERROR] ${sample} failed. Check ${RUN_DIR}/$(safe_name "${sample}").prism.log"
         failures=$((failures + 1))
       fi
-      completed_items=$((completed_items + 1))
+      completed_runs=$((completed_runs + 1))
     fi
   done
   run_pids=("${new_pids[@]}")
   run_samples=("${new_samples[@]}")
 }
 
-reap_download_queue_if_done() {
-  if [[ -z "${download_pid}" ]]; then
-    return
-  fi
-  if is_running_pid "${download_pid}"; then
-    return
-  fi
-  if ! wait "${download_pid}"; then
-    download_queue_failed=1
-    echo "[ERROR] Download queue process failed unexpectedly."
-  fi
-  download_pid=""
-}
-
-trap 'echo "[INTERRUPT] Stopping background jobs."; if [[ -n "${download_pid:-}" ]]; then kill "${download_pid}" 2>/dev/null || true; fi; for pid in "${run_pids[@]:-}"; do kill "${pid}" 2>/dev/null || true; done; exit 130' INT TERM
-
 echo "[CHECK] PROJECT_ROOT: ${PROJECT_ROOT}"
 echo "[CHECK] RUN_SCRIPT: ${RUN_SCRIPT}"
 echo "[CHECK] RUN_DIR: ${RUN_DIR}"
-echo "[CHECK] RSYNC_REMOTE: ${RSYNC_REMOTE}"
-echo "[CHECK] RSYNC_SSH_PORT: ${RSYNC_SSH_PORT}"
-echo "[CHECK] RSYNC_SSH_OPTS: ${RSYNC_SSH_OPTS}"
-echo "[CHECK] RSYNC_OPTS: ${RSYNC_OPTS}"
-echo "[CHECK] PARALLEL_MATES: ${PARALLEL_MATES}"
+echo "[CHECK] BAIDUPCS: ${BAIDUPCS}"
+echo "[CHECK] BAIDUPCS_DOWNLOAD_OPTS: ${BAIDUPCS_DOWNLOAD_OPTS}"
 echo "[CHECK] RAW_DIR: ${RAW_DIR}"
 echo "[CHECK] FASTQ_DIR: ${FASTQ_DIR}"
 echo "[CHECK] MAX_ACTIVE_JOBS: ${MAX_ACTIVE_JOBS}"
@@ -448,28 +415,21 @@ echo "[CHECK] KRAKEN2_EXTRA_OPTS: ${KRAKEN2_EXTRA_OPTS-}"
 echo "[CHECK] STAR_GENOME_LOAD: ${STAR_GENOME_LOAD:-LoadAndKeep}"
 echo "[CHECK] Sample count: ${#samples[@]}"
 
-download_queue &
-download_pid="$!"
-echo "[DOWNLOAD] Download queue started with pid ${download_pid}."
-
-while [[ "${completed_items}" -lt "${#samples[@]}" ]]; do
-  reap_download_queue_if_done
+while [[ "${completed_runs}" -lt "${#samples[@]}" ]]; do
+  reap_download_if_done
   reap_finished_runs
   launch_ready_runs
+  start_download_if_possible
+  reap_download_if_done
+  launch_ready_runs
 
-  if [[ "${download_queue_failed}" -ne 0 && -z "${download_pid}" && "${#run_pids[@]}" -eq 0 ]]; then
-    break
-  fi
-
-  if [[ "${completed_items}" -lt "${#samples[@]}" ]]; then
+  if [[ "${completed_runs}" -lt "${#samples[@]}" ]]; then
     sleep "${POLL_SECONDS}"
   fi
 done
 
-reap_download_queue_if_done
-
-if [[ "${download_queue_failed}" -ne 0 ]]; then
-  failures=$((failures + 1))
+if [[ -n "${download_pid}" ]]; then
+  wait "${download_pid}" || true
 fi
 
 if [[ "${failures}" -gt 0 ]]; then
@@ -478,5 +438,5 @@ if [[ "${failures}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "[DONE] All streaming rsync PRISM jobs finished successfully."
+echo "[DONE] All streaming BaiduPCS-Go PRISM jobs finished successfully."
 echo "[INFO] Logs: ${RUN_DIR}"

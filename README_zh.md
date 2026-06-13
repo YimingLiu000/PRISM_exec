@@ -105,6 +105,10 @@ PRISM 分析与真菌结果提取。
   作用：读取样本列表，按 `MAX_PARALLEL` 控制并发数，逐个调用 `run_prism_rnaseq.sh`，并在 STAR shared memory 模式下调度多个样本并行运行
 - `run_prism_samples_parallel_with_serial_kraken2.sh`
   作用：读取样本列表，启动多个可重叠的 PRISM 样本任务，但通过全局 `flock` 锁保证同一时间只有一个样本执行 Kraken2；适合 `KRAKEN2_EXTRA_OPTS=""`、Kraken2 数据库完整加载到内存且服务器内存只能容纳一个 Kraken2 数据库的场景
+- `run_prism_streaming_rsync_serial_kraken2.sh`
+  作用：使用 `rsync` 从远程数据服务器按清单顺序流式同步样本；下载队列和计算队列相互独立，样本下载完成后进入 PRISM 计算队列，Kraken2 仍通过全局 `flock` 串行执行，单样本完成后删除该样本的 `.fastq.gz` 和解压后的 `.fastq` 输入文件，仅保留 PRISM 结果。
+- `run_prism_streaming_baidupcs_serial_kraken2.sh`
+  作用：使用 `BaiduPCS-Go` 从百度网盘按清单顺序流式下载样本；下载队列不等待计算队列，已下载样本进入 PRISM 计算队列，Kraken2 全局串行执行，单样本完成后清理该样本输入文件，仅保留结果。
 - `extract_fungal_abundance.R`
   作用：从 PRISM 最终结果中提取真菌 read、物种汇总和最终 FASTA
 
@@ -114,6 +118,7 @@ PRISM 分析与真菌结果提取。
 - 对最终结果做真菌专门提取
 - 支持在预加载宿主索引后进行多样本并行调度；并行时每个样本独立输出到 `${PROJECT_ROOT}/02fastq/<sample>_prism`
 - 支持多样本重叠运行但 Kraken2 串行执行，使 Kraken2 充分加载内存运行，同时让前一个样本的下游步骤和后一个样本的 Kraken2 步骤衔接起来
+- 支持边下载边计算：通过 `rsync` 或 `BaiduPCS-Go` 流式获取样本，下载完成的样本立即进入计算队列，计算追上下载时自动等待下一个样本下载完成，并在每个样本完成后释放输入文件占用的磁盘空间
 
 ### 6. `06_docs`
 中文说明文档。
@@ -751,6 +756,456 @@ sed -i 's/\r$//' ${PROJECT_ROOT}/00script/05_analysis/run_prism_samples_parallel
 ```bash
 bash -n ${PROJECT_ROOT}/00script/05_analysis/run_prism_rnaseq.sh
 bash -n ${PROJECT_ROOT}/00script/05_analysis/run_prism_samples_parallel_with_serial_kraken2.sh
+```
+
+### 7.6 rsync 边下载边计算，并保持 Kraken2 串行执行
+
+如果服务器硬盘空间有限，不适合一次性把所有样本下载到 `${PROJECT_ROOT}/01rawdata`，推荐使用：
+
+```bash
+${PROJECT_ROOT}/00script/05_analysis/run_prism_streaming_rsync_serial_kraken2.sh
+```
+
+这个脚本的调度逻辑是：
+
+1. 下载队列和计算队列相互独立。
+2. 下载队列按清单顺序持续下载样本，不等待计算完成。
+3. 一个样本的 R1/R2 两个 `.fastq.gz` 都同步完成后，该样本立即进入计算队列。
+4. 如果下载速度慢、计算追上下载进度，计算队列会自动等待下一个样本下载完成。
+5. Kraken2 仍然通过全局 `flock` 锁串行执行，同一时间只有一个样本运行 Kraken2。
+6. 每个样本计算结束后，脚本会删除该样本下载的 `.fastq.gz` 和解压后的 `.fastq` 输入文件，只保留 PRISM 结果。
+
+#### 7.6.1 准备远程样本路径清单
+
+清单文件每行写一个远程样本目录，或者写一个远程 FASTQ.GZ 文件路径。空行和以 `#` 开头的注释行会被忽略。
+
+推荐写远程样本目录：
+
+```bash
+cat > remote_sample_dirs.txt <<EOF
+/data/rnaseq/FUSCCTNBC001
+/data/rnaseq/FUSCCTNBC002
+/data/rnaseq/FUSCCTNBC006.rep
+EOF
+```
+
+默认情况下，每个远程样本目录中需要有：
+
+```bash
+<sample>_RNAseq_R1.fastq.gz
+<sample>_RNAseq_R2.fastq.gz
+```
+
+例如样本名为 `FUSCCTNBC006.rep` 时，脚本会寻找：
+
+```bash
+/data/rnaseq/FUSCCTNBC006.rep/FUSCCTNBC006.rep_RNAseq_R1.fastq.gz
+/data/rnaseq/FUSCCTNBC006.rep/FUSCCTNBC006.rep_RNAseq_R2.fastq.gz
+```
+
+因此样本名中包含点号 `.` 不影响识别；关键是远程目录名和 FASTQ 文件名前缀要一致。
+
+如果你的清单写的是 FASTQ 文件路径，也可以只写 R1 或 R2 中任意一个，脚本会自动取其所在目录并推断样本名：
+
+```bash
+cat > remote_sample_dirs.txt <<EOF
+/data/rnaseq/FUSCCTNBC001/FUSCCTNBC001_RNAseq_R1.fastq.gz
+/data/rnaseq/FUSCCTNBC002/FUSCCTNBC002_RNAseq_R1.fastq.gz
+EOF
+```
+
+如果 FASTQ 后缀不是默认的 `_RNAseq_R1.fastq.gz` 和 `_RNAseq_R2.fastq.gz`，运行前统一设置：
+
+```bash
+export FQ1_END="_R1.fastq"
+export FQ2_END="_R2.fastq"
+```
+
+#### 7.6.2 先确认 rsync/ssh 能连通远程服务器
+
+当前远程服务器和 SSH 参数推荐这样测试：
+
+```bash
+ssh -p 25061 -i ~/.ssh/id_ed25519_rsync_A ubuntu@biotrainee.cn 'hostname'
+```
+
+如果这一步需要输入密码，说明证书免密登录还没有配置好。脚本可以运行，但长任务中更推荐先配好免密登录。
+
+#### 7.6.3 设置运行参数
+
+在正式运行前，建议先设置以下变量：
+
+```bash
+export PROJECT_ROOT=/your/path/to/PRISM
+
+export RSYNC_REMOTE=ubuntu@biotrainee.cn
+export RSYNC_SSH_PORT=25061
+export RSYNC_SSH_OPTS="-i ~/.ssh/id_ed25519_rsync_A"
+export RSYNC_OPTS="-av --partial --append-verify --info=progress2 --timeout=600"
+export PARALLEL_MATES=TRUE
+
+export USE_CUSTOM_DB=TRUE
+export KRAKEN2_EXTRA_OPTS=""
+export STAR_GENOME_LOAD=LoadAndKeep
+
+export PRISM_THREADS=16
+export MAX_ACTIVE_JOBS=4
+export KRAKEN2_QUEUE_DEPTH=2
+```
+
+rsync 相关参数含义：
+
+- `RSYNC_REMOTE`：远程服务器登录前缀，这里是 `ubuntu@biotrainee.cn`。
+- `RSYNC_SSH_PORT`：远程 SSH 端口，这里是 `25061`。
+- `RSYNC_SSH_OPTS`：传给 `ssh` 的额外参数，这里用 `-i ~/.ssh/id_ed25519_rsync_A` 指定 rsync 专用证书。
+- `RSYNC_OPTS`：传给 `rsync` 的参数；`--partial` 和 `--append-verify` 支持断点续传，`--info=progress2` 显示整体传输进度，`--timeout=600` 避免长时间无响应。
+- `PARALLEL_MATES=TRUE`：同一个样本的 R1 和 R2 两个文件同时下载；如果远程服务器或网络压力较大，可以改成 `FALSE`。
+
+计算相关参数含义：
+
+- `USE_CUSTOM_DB=TRUE`：使用当前项目配置的自定义数据库。
+- `KRAKEN2_EXTRA_OPTS=""`：不使用 `--memory-mapping`，让 Kraken2 完整加载数据库到内存。
+- `MAX_ACTIVE_JOBS`：最多允许多少个 PRISM 样本进程同时存在。
+- `KRAKEN2_QUEUE_DEPTH`：允许多少个已就绪样本排在 Kraken2 前后；默认建议 `2`，用于减少 Kraken2 空窗时间。
+
+#### 7.6.4 可选：预加载 STAR shared memory
+
+如果希望多个 STAR 进程复用同一份宿主 genome index，运行前执行：
+
+```bash
+bash ${PROJECT_ROOT}/00script/04_host/star_shared_memory_control.sh load
+```
+
+该 streaming 脚本默认会向单样本 PRISM 流程传递：
+
+```bash
+STAR_GENOME_LOAD=LoadAndKeep
+```
+
+所以可以和 `star_shared_memory_control.sh load` 衔接使用。
+
+#### 7.6.5 启动 rsync 边下载边计算
+
+确认 `remote_sample_dirs.txt` 准备好后执行：
+
+```bash
+bash ${PROJECT_ROOT}/00script/05_analysis/run_prism_streaming_rsync_serial_kraken2.sh remote_sample_dirs.txt
+```
+
+运行过程中，脚本会把远程文件同步到：
+
+```bash
+${PROJECT_ROOT}/01rawdata
+```
+
+然后由 `run_prism_rnaseq.sh` 解压并计算，输出仍然位于：
+
+```bash
+${PROJECT_ROOT}/02fastq/<sample>_prism
+```
+
+#### 7.6.6 查看结果和日志
+
+每个样本的最终结果位于：
+
+```bash
+${PROJECT_ROOT}/02fastq/<sample>_prism/<sample>-counts.csv
+${PROJECT_ROOT}/02fastq/<sample>_prism/<sample>-results.csv
+```
+
+每个样本的 PRISM 主流程日志位于：
+
+```bash
+${PROJECT_ROOT}/02fastq/<sample>_prism/data/<sample>_PRISM.log
+```
+
+streaming rsync 调度日志位于：
+
+```bash
+${PROJECT_ROOT}/02fastq/streaming_rsync_serial_kraken2_logs/<run_id>/
+```
+
+其中：
+
+- `<sample>.prism.log`：该样本外层 PRISM 调度日志。
+- `downloads/<sample>.rsync.log`：该样本 rsync 下载日志。
+- `kraken2_events/`：Kraken2 串行锁事件记录。
+- `download_ready/`：已下载完成、可以进入计算队列的样本标记。
+- `download_failed/`：下载失败的样本标记。
+
+日志中如果看到下面的信息，说明 Kraken2 串行锁正在生效：
+
+```bash
+[KRAKEN2-LOCK] <sample> waiting for Kraken2 lock
+[KRAKEN2-LOCK] <sample> acquired Kraken2 lock
+[KRAKEN2-LOCK] <sample> released Kraken2 lock
+```
+
+#### 7.6.7 运行结束后释放 STAR shared memory
+
+所有任务结束后，执行：
+
+```bash
+bash ${PROJECT_ROOT}/00script/04_host/star_shared_memory_control.sh remove
+```
+
+#### 7.6.8 换行符检查
+
+如果脚本从 Windows 同步到 Linux 后出现下面这类报错：
+
+```bash
+$'\r': command not found
+set: pipefail: invalid option name
+```
+
+说明 shell 脚本仍是 Windows CRLF 换行。请在服务器上执行：
+
+```bash
+dos2unix ${PROJECT_ROOT}/00script/05_analysis/run_prism_rnaseq.sh
+dos2unix ${PROJECT_ROOT}/00script/05_analysis/run_prism_streaming_rsync_serial_kraken2.sh
+```
+
+如果服务器没有 `dos2unix`，可以用：
+
+```bash
+sed -i 's/\r$//' ${PROJECT_ROOT}/00script/05_analysis/run_prism_rnaseq.sh
+sed -i 's/\r$//' ${PROJECT_ROOT}/00script/05_analysis/run_prism_streaming_rsync_serial_kraken2.sh
+```
+
+然后检查语法：
+
+```bash
+bash -n ${PROJECT_ROOT}/00script/05_analysis/run_prism_rnaseq.sh
+bash -n ${PROJECT_ROOT}/00script/05_analysis/run_prism_streaming_rsync_serial_kraken2.sh
+```
+
+### 7.7 BaiduPCS-Go 边下载边计算，并保持 Kraken2 串行执行
+
+如果原始 RNA-seq 数据保存在百度网盘上，且服务器硬盘空间有限，不适合一次性把所有样本全部下载到 `${PROJECT_ROOT}/01rawdata`，可以使用：
+
+```bash
+${PROJECT_ROOT}/00script/05_analysis/run_prism_streaming_baidupcs_serial_kraken2.sh
+```
+
+这个脚本的调度逻辑是：
+
+1. 下载队列和计算队列是分开的两个队列。
+2. 下载队列按清单顺序持续调用 `BaiduPCS-Go` 下载样本，不等待计算队列完成。
+3. 一个样本的 R1/R2 两个 `.fastq.gz` 都下载完成后，该样本立即进入 PRISM 计算队列。
+4. 如果下载速度慢、计算进度追上下载进度，计算队列会暂停等待，直到下一个样本下载完成后再启动新的计算。
+5. Kraken2 仍然通过全局 `flock` 锁串行执行，同一时间只有一个样本运行 Kraken2。
+6. 每个样本计算结束后，脚本会删除该样本下载的 `.fastq.gz` 和解压后的 `.fastq` 输入文件，只保留 PRISM 结果。
+
+#### 7.7.1 准备百度网盘样本路径清单
+
+清单文件每行写一个百度网盘样本目录，或者写一个百度网盘 FASTQ.GZ 文件路径。空行和以 `#` 开头的注释行会被忽略。
+
+推荐写样本目录：
+
+```bash
+cat > baidu_sample_paths.txt <<EOF
+/RNAseq/FUSCCTNBC001
+/RNAseq/FUSCCTNBC002
+/RNAseq/FUSCCTNBC003
+EOF
+```
+
+默认情况下，每个样本目录中需要有：
+
+```bash
+<sample>_RNAseq_R1.fastq.gz
+<sample>_RNAseq_R2.fastq.gz
+```
+
+例如样本名为 `FUSCCTNBC001` 时，脚本会下载：
+
+```bash
+/RNAseq/FUSCCTNBC001/FUSCCTNBC001_RNAseq_R1.fastq.gz
+/RNAseq/FUSCCTNBC001/FUSCCTNBC001_RNAseq_R2.fastq.gz
+```
+
+也可以只在清单中写 R1 或 R2 中任意一个 FASTQ.GZ 文件路径，脚本会自动取其所在目录并推断样本名：
+
+```bash
+cat > baidu_sample_paths.txt <<EOF
+/RNAseq/FUSCCTNBC001/FUSCCTNBC001_RNAseq_R1.fastq.gz
+/RNAseq/FUSCCTNBC002/FUSCCTNBC002_RNAseq_R1.fastq.gz
+EOF
+```
+
+如果 FASTQ 后缀不是默认的 `_RNAseq_R1.fastq.gz` 和 `_RNAseq_R2.fastq.gz`，运行前统一设置：
+
+```bash
+export FQ1_END="_R1.fastq"
+export FQ2_END="_R2.fastq"
+```
+
+这里的规则是：脚本会寻找 `${SAMPLE}${FQ1_END}.gz` 和 `${SAMPLE}${FQ2_END}.gz`。
+
+#### 7.7.2 确认 BaiduPCS-Go 可用
+
+运行前需要先在服务器上准备好 `BaiduPCS-Go`，并确认已经登录百度网盘账号。
+
+可以把 `BaiduPCS-Go` 放在脚本同目录：
+
+```bash
+${PROJECT_ROOT}/00script/05_analysis/BaiduPCS-Go
+```
+
+也可以在运行前显式指定：
+
+```bash
+export BAIDUPCS=/path/to/BaiduPCS-Go
+```
+
+建议先手动测试能否访问网盘路径，例如：
+
+```bash
+${BAIDUPCS} ls "/RNAseq"
+```
+
+如果这一步提示未登录或权限不足，需要先用 `BaiduPCS-Go` 完成登录和路径确认，再启动长任务。
+
+#### 7.7.3 设置运行参数
+
+在正式运行前，建议先设置以下变量：
+
+```bash
+export PROJECT_ROOT=/your/path/to/PRISM
+
+export BAIDUPCS=/path/to/BaiduPCS-Go
+export BAIDUPCS_DOWNLOAD_OPTS="--ow -p 8"
+
+export USE_CUSTOM_DB=TRUE
+export KRAKEN2_EXTRA_OPTS=""
+export STAR_GENOME_LOAD=LoadAndKeep
+
+export PRISM_THREADS=16
+export MAX_ACTIVE_JOBS=4
+export KRAKEN2_QUEUE_DEPTH=2
+```
+
+BaiduPCS-Go 相关参数含义：
+
+- `BAIDUPCS`：`BaiduPCS-Go` 可执行文件路径；如果不设置，脚本会优先查找脚本同目录下的 `BaiduPCS-Go`，然后查找 PATH。
+- `BAIDUPCS_DOWNLOAD_OPTS`：传给 `BaiduPCS-Go d` 的下载参数；默认是 `--ow`，表示覆盖已有同名文件。可以按网络情况追加并发、重试等参数，例如 `--ow -p 8`。
+
+计算相关参数含义：
+
+- `USE_CUSTOM_DB=TRUE`：使用当前项目配置的自定义数据库。
+- `KRAKEN2_EXTRA_OPTS=""`：不使用 `--memory-mapping`，让 Kraken2 完整加载数据库到内存。
+- `MAX_ACTIVE_JOBS`：最多允许多少个 PRISM 样本进程同时存在。
+- `KRAKEN2_QUEUE_DEPTH`：允许多少个已下载完成的样本排在 Kraken2 前后；默认建议 `2`，用于减少 Kraken2 空窗时间。
+
+#### 7.7.4 可选：预加载 STAR shared memory
+
+如果希望多个 STAR 进程复用同一份宿主 genome index，运行前执行：
+
+```bash
+bash ${PROJECT_ROOT}/00script/04_host/star_shared_memory_control.sh load
+```
+
+该 streaming 脚本默认会向单样本 PRISM 流程传递：
+
+```bash
+STAR_GENOME_LOAD=LoadAndKeep
+```
+
+所以可以和 `star_shared_memory_control.sh load` 衔接使用。
+
+#### 7.7.5 启动 BaiduPCS-Go 边下载边计算
+
+确认 `baidu_sample_paths.txt` 准备好后执行：
+
+```bash
+bash ${PROJECT_ROOT}/00script/05_analysis/run_prism_streaming_baidupcs_serial_kraken2.sh baidu_sample_paths.txt
+```
+
+运行过程中，脚本会把百度网盘文件下载到：
+
+```bash
+${PROJECT_ROOT}/01rawdata
+```
+
+然后由 `run_prism_rnaseq.sh` 解压并计算，输出仍然位于：
+
+```bash
+${PROJECT_ROOT}/02fastq/<sample>_prism
+```
+
+#### 7.7.6 查看结果和日志
+
+每个样本的最终结果位于：
+
+```bash
+${PROJECT_ROOT}/02fastq/<sample>_prism/<sample>-counts.csv
+${PROJECT_ROOT}/02fastq/<sample>_prism/<sample>-results.csv
+```
+
+每个样本的 PRISM 主流程日志位于：
+
+```bash
+${PROJECT_ROOT}/02fastq/<sample>_prism/data/<sample>_PRISM.log
+```
+
+streaming BaiduPCS-Go 调度日志位于：
+
+```bash
+${PROJECT_ROOT}/02fastq/streaming_baidupcs_serial_kraken2_logs/<run_id>/
+```
+
+其中：
+
+- `<sample>.prism.log`：该样本外层 PRISM 调度日志。
+- `downloads/<sample>.baidupcs.log`：该样本 BaiduPCS-Go 下载日志。
+- `kraken2_events/`：Kraken2 串行锁事件记录。
+- `download_done/`：已下载完成、可以进入计算队列的样本标记。
+- `download_failed/`：下载失败的样本标记。
+
+日志中如果看到下面的信息，说明 Kraken2 串行锁正在生效：
+
+```bash
+[KRAKEN2-LOCK] <sample> waiting for Kraken2 lock
+[KRAKEN2-LOCK] <sample> acquired Kraken2 lock
+[KRAKEN2-LOCK] <sample> released Kraken2 lock
+```
+
+#### 7.7.7 运行结束后释放 STAR shared memory
+
+所有任务结束后，执行：
+
+```bash
+bash ${PROJECT_ROOT}/00script/04_host/star_shared_memory_control.sh remove
+```
+
+#### 7.7.8 换行符检查
+
+如果脚本从 Windows 同步到 Linux 后出现下面这类报错：
+
+```bash
+$'\r': command not found
+set: pipefail: invalid option name
+```
+
+说明 shell 脚本仍是 Windows CRLF 换行。请在服务器上执行：
+
+```bash
+dos2unix ${PROJECT_ROOT}/00script/05_analysis/run_prism_rnaseq.sh
+dos2unix ${PROJECT_ROOT}/00script/05_analysis/run_prism_streaming_baidupcs_serial_kraken2.sh
+```
+
+如果服务器没有 `dos2unix`，可以用：
+
+```bash
+sed -i 's/\r$//' ${PROJECT_ROOT}/00script/05_analysis/run_prism_rnaseq.sh
+sed -i 's/\r$//' ${PROJECT_ROOT}/00script/05_analysis/run_prism_streaming_baidupcs_serial_kraken2.sh
+```
+
+然后检查语法：
+
+```bash
+bash -n ${PROJECT_ROOT}/00script/05_analysis/run_prism_rnaseq.sh
+bash -n ${PROJECT_ROOT}/00script/05_analysis/run_prism_streaming_baidupcs_serial_kraken2.sh
 ```
 
 ## 8. 提取真菌结果

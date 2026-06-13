@@ -14,6 +14,20 @@ log_error <- function(...) {
   stop(paste(...))
 }
 
+prism_extract_header_taxid <- function(headers) {
+  headers <- as.character(headers)
+  matches <- stringr::str_match_all(
+    headers,
+    stringr::regex("taxid\\s*(?:[:=|]|\\s)\\s*([0-9]+)", ignore_case = TRUE)
+  )
+  vapply(matches, function(match) {
+    if (nrow(match) == 0) {
+      return(NA_character_)
+    }
+    match[nrow(match), 2]
+  }, character(1))
+}
+
 # ---------- Pipeline Execution ----------
 run_step <- function(step_name, expr) {
   log_message("Starting:", step_name)
@@ -565,17 +579,8 @@ prism_subsample = function(sample,
   headers = ShortRead::id(fa1)
   
   #--- parse taxids from headers (in 1k‐read chunks if large) ---
-  if(length(headers) > 1000){
-    header_taxid = list()
-    i1 = seq(0, length(headers), by = 1000)[-1] 
-    i2 = i1 - 999  
-    if(max(i1) < length(fa1)){i2 = c(i2, max(i1)+1); i1=c(i1, length(fa1))}
-    for(i in 1:length(i2)){
-      # print(i)
-      header_taxid[[i]] = str_remove(headers[i2[i]:i1[i]] %>% as.character(), '.*taxid\\|')
-    }
-    header_taxid = unlist(header_taxid)
-  } else {header_taxid = str_remove(headers %>% as.character(), '.*taxid\\|')}
+  header_taxid = prism_extract_header_taxid(headers)
+  taxid = as.character(taxid)
   
   #--- initial sampling: find indices of each taxid in header_taxid ---
   #--- limit to max_sample per taxid ---
@@ -601,7 +606,7 @@ prism_subsample = function(sample,
         str_subset('NA', negate = T) %>% 
         as.numeric() %>%
         unique()
-      micro_headers[[i]] = headers[which(header_taxid %in% lin)[1:max_sample] %>% na.omit()]
+      micro_headers[[i]] = headers[which(header_taxid %in% as.character(lin))[1:max_sample] %>% na.omit()]
     }
     
     ## include lower resolution reads (e.g. genus/family/class etc.) if not enough species level reads are sampled
@@ -620,7 +625,7 @@ prism_subsample = function(sample,
       while(length(micro_headers[[i]]) < max_sample & counter > 0){
         counter = counter - 1
         tx = lin[counter]
-        micro_headers[[i]] = c(micro_headers[[i]], headers[which(header_taxid == tx)[1:max_sample] %>% na.omit()])
+        micro_headers[[i]] = c(micro_headers[[i]], headers[which(header_taxid == as.character(tx))[1:max_sample] %>% na.omit()])
         if(length(micro_headers[[i]]) > max_sample){micro_headers[[i]] = micro_headers[[i]][1:max_sample]}
       }
     }
@@ -635,7 +640,7 @@ prism_subsample = function(sample,
   
   #--- build ID‐to‐taxid table ---
   ids = ShortRead::id(fa1) %>% as.character() 
-  tax = ids %>% str_remove('.*taxid\\|') %>% as.numeric()
+  tax = prism_extract_header_taxid(ids) %>% as.numeric()
   id_df = data.frame(taxid = tax, id = ids %>% str_remove('\\s.*'))
   
   #--- process FASTA #2 similarly ---
@@ -1329,13 +1334,17 @@ prism_genbank_stats = function(prod){
 
 prism_parse_kmer_counts <- function(kmer_string) {
   if (length(kmer_string) == 0 || is.na(kmer_string)) {
-    return(data.frame(taxid = numeric(), n = numeric()))
+    return(data.frame(taxid = character(), n = numeric(), stringsAsFactors = FALSE))
   }
 
   data.frame(pos = strsplit(as.character(kmer_string), '\\s') %>% unlist(), stringsAsFactors = F) %>%
     dplyr::filter(nzchar(pos)) %>%
-    tidyr::separate(pos, into = c('taxid', 'nkmer'), sep = ':', convert = T, fill = 'right') %>%
-    dplyr::filter(!is.na(taxid), !is.na(nkmer)) %>%
+    tidyr::separate(pos, into = c('taxid', 'nkmer'), sep = ':', convert = FALSE, fill = 'right') %>%
+    dplyr::mutate(
+      taxid = as.character(taxid),
+      nkmer = suppressWarnings(as.numeric(nkmer))
+    ) %>%
+    dplyr::filter(!is.na(taxid), nzchar(taxid), !is.na(nkmer)) %>%
     dplyr::group_by(taxid) %>%
     dplyr::summarize(n = sum(nkmer, na.rm = TRUE), .groups = 'drop')
 }
@@ -1362,7 +1371,7 @@ prism_parse_kmer_counts <- function(kmer_string) {
 prism_misclass_kmertax = function(out_path, sample, kr_report, blast){
   
   # Get unique staxids from the `prod` object
-  tx = unique(blast$staxids)
+  tx = as.character(unique(blast$staxids))
   
   # Find the Kraken output file that contains k-mer taxonomy assignments.
   out = file.path(out_path, paste0(sample, '.kraken.output.txt'))
@@ -1391,7 +1400,7 @@ prism_misclass_kmertax = function(out_path, sample, kr_report, blast){
   microbiome_output_file = out %>% 
     dplyr::select(-V1) %>% 
     separate(V3, into = c('name', 'taxid'), sep = '\\(taxid') %>% 
-    mutate(taxid = str_remove(taxid, '\\)') %>% trimws() %>% as.numeric(), name = trimws(name)) %>% 
+    mutate(taxid = str_remove(taxid, '\\)') %>% trimws() %>% as.character(), name = trimws(name)) %>% 
     dplyr::rename(id = V2) %>%
     tibble()
   
@@ -1410,7 +1419,7 @@ prism_misclass_kmertax = function(out_path, sample, kr_report, blast){
       str_split('\\*') %>% 
       unlist() %>%
       str_subset('NA', negate = T) %>% 
-      as.numeric() %>%
+      as.character() %>%
       unique()
     
     # Get full lineage that ends in the current taxid
@@ -1419,13 +1428,13 @@ prism_misclass_kmertax = function(out_path, sample, kr_report, blast){
       str_remove('\\*$') %>% 
       str_split('\\*') %>% 
       unlist() %>% 
-      as.numeric() 
+      as.character() 
     
     # Combine full lineage with any additional entries from `lin`
     full.lin = c(full.lin, lin) %>% unique()
     
     # Map lineage taxids to taxonomic ranks from `kr_report`
-    ranks = kr_report$V6[kr_report$V7 %in% full.lin] %>% as.character() %>% str_to_lower() %>% str_replace('d', 'k') %>% str_remove('[0-9]')
+    ranks = kr_report$V6[as.character(kr_report$V7) %in% full.lin] %>% as.character() %>% str_to_lower() %>% str_replace('d', 'k') %>% str_remove('[0-9]')
     
     # Build a data frame of taxids and their ranks
     d = data.frame(taxid = full.lin %>% as.character(), rank = ranks %>% factor(level = unique(ranks)), stringsAsFactors = F)
@@ -1439,7 +1448,7 @@ prism_misclass_kmertax = function(out_path, sample, kr_report, blast){
     }) %>% bind_rows()
     
     # Combine and filter by key taxonomic ranks
-    d3 = cbind(taxid = taxa, d, d2) %>% 
+    d3 = cbind(taxid = as.character(taxa), d, d2) %>% 
       subset(rank %in% c('k','p','c','o','f','g','s')) %>% 
       group_by(taxid, rank) %>% 
       summarize_if(.predicate = is.numeric, .funs = sum)
@@ -1451,7 +1460,7 @@ prism_misclass_kmertax = function(out_path, sample, kr_report, blast){
     d = data.frame(taxid = as.character(full.lin), rank = ranks, stringsAsFactors = F)
     
     # Subset microbiome output to current lineage
-    out = subset(microbiome_output_file, taxid %in% lin) %>% 
+    out = subset(microbiome_output_file, taxid %in% as.character(lin)) %>% 
       separate(V5, into = c('r1', 'r2'), sep = '\\|\\:\\|') 
     
     # Limit rows for performance reasons
@@ -1463,7 +1472,7 @@ prism_misclass_kmertax = function(out_path, sample, kr_report, blast){
     # Loop through each read
     if(nrow(out) == 0){
       li[[as.character(taxa)]] = data.frame(
-        taxid = taxa,
+        taxid = as.character(taxa),
         unclassified = 0,
         host = 0,
         unrelated = 0,
@@ -1492,8 +1501,8 @@ prism_misclass_kmertax = function(out_path, sample, kr_report, blast){
         dplyr::left_join(d, by = 'taxid') 
       
       # Annotate special cases: unclassified, human, unrelated
-      if(0 %in% r$taxid){r$rank[r$taxid == 0] = 'unclassified'}
-      if(any(9606 %in% r$taxid)){r$rank[r$taxid %in% 9606] = 'human'}
+      if("0" %in% r$taxid){r$rank[r$taxid == "0"] = 'unclassified'}
+      if(any("9606" %in% r$taxid)){r$rank[r$taxid %in% "9606"] = 'human'}
       if(any(is.na(r$rank))){r$rank[which(is.na(r$rank))] = 'unrelated'}
       if(length(which(r$rank == 'unrelated')) > 1){
         r$n[r$rank == 'unrelated'] = sum(r$n[r$rank == 'unrelated'])
@@ -1503,7 +1512,7 @@ prism_misclass_kmertax = function(out_path, sample, kr_report, blast){
       # Compile final summary for the read
       df.list[[i]] = data.frame(
         id = out$id[i],
-        taxid = taxa,
+        taxid = as.character(taxa),
         unclassified = ifelse('unclassified' %in% r$rank, r$n[r$rank == 'unclassified'], 0),
         host = ifelse('human' %in% r$rank, r$n[r$rank == 'human'], 0),
         unrelated = ifelse('unrelated' %in% r$rank, r$n[r$rank == 'unrelated'], 0),
