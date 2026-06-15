@@ -619,9 +619,12 @@ prism_subsample = function(sample,
         str_subset('NA', negate = T) %>% 
         as.numeric() %>%
         unique()
+      if(length(lin) == 0){next}
       idx = which(lin %in% c(2, 4751, 10239))
+      if(length(idx) == 0){next}
       lin = lin[idx:length(lin)]
       counter = which(lin == names(micro_headers)[i])
+      if(length(counter) == 0){next}
       while(length(micro_headers[[i]]) < max_sample & counter > 0){
         counter = counter - 1
         tx = lin[counter]

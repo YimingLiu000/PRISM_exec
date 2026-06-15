@@ -114,9 +114,28 @@ if (!file.exists(kraken_report_file) || !file.exists(kraken_output_file)) {
 } else {
   log_message("Skipping Kraken2 – output exists.")
   
-  kr_report <- read.delim(paste0(out_path, sample, '.kraken.report.txt'), header = F, skip = 2) %>% mutate(V8=str_squish(V8))
-  mpa <- read.table(paste0(out_path, sample, '.mpa.prism.txt'))
-  sp_taxid <- kr_report$V7[str_detect(kr_report$V6, 'S')]
+  kr_report <- read.delim(
+    paste0(out_path, sample, '.kraken.report.txt'),
+    header = F,
+    skip = 2,
+    stringsAsFactors = F
+  ) %>% mutate(V8 = str_squish(V8))
+  mpa <- read.table(
+    paste0(out_path, sample, '.mpa.prism.txt'),
+    header = T,
+    stringsAsFactors = F,
+    check.names = F
+  )
+  if (!"taxid" %in% names(mpa)) {
+    stop("Cached mpa.prism.txt was read without a taxid column: ", paste0(out_path, sample, ".mpa.prism.txt"))
+  }
+  n = str_which(mpa$V1, '__Bacteria|__Fungi|__Viruses')
+  min_reads = ceiling(sum(kr_report$V2[kr_report$V7 %in% c(2,4751,10239)])/min_read_per)
+  min_reads = ifelse(min_reads > 9, min_reads, 10)
+  kr_tmp = kr_report
+  kr_tmp$uf = kr_tmp$V5/kr_tmp$V2
+  kr_tmp = kr_tmp[n, ] %>% subset((V2 > min_reads | (uf > min_uniq_frac & V2 > 9)))
+  sp_taxid <- kr_tmp$V7[str_detect(kr_tmp$V6, 'S')]
 }
 
 # ------- Step 2 ------- 
@@ -155,7 +174,7 @@ if (!file.exists(file.path(out_path, paste0(sample, "_sub_fa1")))) {
   log_message("Skipping subsampling – output exists.")
   sub_fa1 = ShortRead::readFasta(file.path(out_path, paste0(sample, "_sub_fa1")))
   ids = ShortRead::id(sub_fa1) %>% as.character() 
-  tax = ids %>% str_remove('.*taxid\\|') %>% as.numeric()
+  tax = prism_extract_header_taxid(ids) %>% as.numeric()
   id_df = data.frame(taxid = tax, id = ids %>% str_remove('\\s.*'))
 }
 
