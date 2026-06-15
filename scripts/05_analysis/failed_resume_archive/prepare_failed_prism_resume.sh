@@ -118,6 +118,7 @@ quarantine_downstream() {
   quarantine_file "${data_dir}/${sample}-unmapped.csv" "${quarantine_dir}/data"
   quarantine_file "${data_dir}/${sample}-xgmat.csv" "${quarantine_dir}/data"
   quarantine_file "${data_dir}/${sample}.tempout.txt" "${quarantine_dir}/data"
+  quarantine_file "${data_dir}/customdb" "${quarantine_dir}/data"
 }
 
 checked=0
