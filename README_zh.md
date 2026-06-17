@@ -844,7 +844,7 @@ export RSYNC_SSH_OPTS="-i ~/.ssh/id_ed25519_rsync_A"
 export RSYNC_OPTS="-av --partial --append-verify --info=progress2 --timeout=600"
 export PARALLEL_MATES=TRUE
 
-export USE_CUSTOM_DB=TRUE
+export USE_CUSTOM_DB=FALSE
 export KRAKEN2_EXTRA_OPTS=""
 export STAR_GENOME_LOAD=LoadAndKeep
 
@@ -863,10 +863,12 @@ rsync 相关参数含义：
 
 计算相关参数含义：
 
-- `USE_CUSTOM_DB=TRUE`：使用当前项目配置的自定义数据库。
+- `USE_CUSTOM_DB=FALSE`：直接使用完整 BLAST 数据库，不构建临时 custom BLAST 数据库；这是当前推荐设置。
 - `KRAKEN2_EXTRA_OPTS=""`：不使用 `--memory-mapping`，让 Kraken2 完整加载数据库到内存。
 - `MAX_ACTIVE_JOBS`：最多允许多少个 PRISM 样本进程同时存在。
 - `KRAKEN2_QUEUE_DEPTH`：允许多少个已就绪样本排在 Kraken2 前后；默认建议 `2`，用于减少 Kraken2 空窗时间。
+
+`--use_custom_db` 问题说明：在失败样本 resume 排查中，`FUSCCTNBC003` 使用 `--use_custom_db TRUE` 时，subsample BLAST 结果文件中的 `staxids` 列全部为 `0`。PRISM 后续依赖 `staxids` 将 BLAST 命中匹配回 Kraken/MPA 的微生物 taxid；当 `staxids` 全为 `0` 时，`prism_filter()` 会把所有 BLAST 命中视为非目标微生物命中，multimapping 阶段得不到任何 uniquely identifiable microbial species，最终写出空的 `results.csv` 和 `counts.csv`。同一样本改用 `--use_custom_db FALSE` 后可以得到结果，说明该零结果来自 custom BLAST DB 的 accession-to-taxid 映射问题，而不是样本本身没有微生物信号。因此常规运行、失败样本 resume 和 streaming 下载分析均建议设置为 `FALSE`；只有确认 custom DB 生成的 taxid map 非空且 BLAST 输出真实 NCBI taxid 后，再考虑开启 `TRUE`。
 
 #### 7.6.4 可选：预加载 STAR shared memory
 
@@ -1076,7 +1078,7 @@ export PROJECT_ROOT=/your/path/to/PRISM
 export BAIDUPCS=/path/to/BaiduPCS-Go
 export BAIDUPCS_DOWNLOAD_OPTS="--ow -p 8"
 
-export USE_CUSTOM_DB=TRUE
+export USE_CUSTOM_DB=FALSE
 export KRAKEN2_EXTRA_OPTS=""
 export STAR_GENOME_LOAD=LoadAndKeep
 
@@ -1092,10 +1094,12 @@ BaiduPCS-Go 相关参数含义：
 
 计算相关参数含义：
 
-- `USE_CUSTOM_DB=TRUE`：使用当前项目配置的自定义数据库。
+- `USE_CUSTOM_DB=FALSE`：直接使用完整 BLAST 数据库，不构建临时 custom BLAST 数据库；这是当前推荐设置。
 - `KRAKEN2_EXTRA_OPTS=""`：不使用 `--memory-mapping`，让 Kraken2 完整加载数据库到内存。
 - `MAX_ACTIVE_JOBS`：最多允许多少个 PRISM 样本进程同时存在。
 - `KRAKEN2_QUEUE_DEPTH`：允许多少个已下载完成的样本排在 Kraken2 前后；默认建议 `2`，用于减少 Kraken2 空窗时间。
+
+`--use_custom_db` 问题说明同上：若临时 custom BLAST DB 的 accession-to-taxid 映射失败，BLAST 输出的 `staxids` 可能全部变成 `0`，造成 PRISM 假性零结果。对 streaming 下载和 resume 任务，建议保持 `USE_CUSTOM_DB=FALSE`。
 
 #### 7.7.4 可选：预加载 STAR shared memory
 
