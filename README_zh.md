@@ -826,10 +826,16 @@ export FQ2_END="_R2.fastq"
 当前远程服务器和 SSH 参数推荐这样测试：
 
 ```bash
-ssh -p 25061 -i ~/.ssh/id_ed25519_rsync_A ubuntu@biotrainee.cn 'hostname'
+ssh -p 25061 -i ~/.ssh/id_ed25519_rsync_A -o BatchMode=yes -o ConnectTimeout=10 ubuntu@biotrainee.cn "echo SSH_OK"
 ```
 
 如果这一步需要输入密码，说明证书免密登录还没有配置好。脚本可以运行，但长任务中更推荐先配好免密登录。
+
+如果报错，使用以下命令输出日志：
+
+```bash
+ssh -vvv -p 25061 -i ~/.ssh/id_ed25519_rsync_A ubuntu@biotrainee.cn
+```
 
 #### 7.6.3 设置运行参数
 
@@ -865,6 +871,7 @@ rsync 相关参数含义：
 
 - `USE_CUSTOM_DB=FALSE`：直接使用完整 BLAST 数据库，不构建临时 custom BLAST 数据库；这是当前推荐设置。
 - `KRAKEN2_EXTRA_OPTS=""`：不使用 `--memory-mapping`，让 Kraken2 完整加载数据库到内存。
+- `PRISM_THREADS`：每个样本运行给予的线程数。
 - `MAX_ACTIVE_JOBS`：最多允许多少个 PRISM 样本进程同时存在。
 - `KRAKEN2_QUEUE_DEPTH`：允许多少个已就绪样本排在 Kraken2 前后；默认建议 `2`，用于减少 Kraken2 空窗时间。
 
