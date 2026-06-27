@@ -2,10 +2,11 @@
 
 # Stream PRISM RNA-seq samples from Baidu Netdisk with BaiduPCS-Go while
 # processing already downloaded samples. The download queue and PRISM compute
-# queue are independent: downloading keeps moving through the manifest and does
-# not wait for compute jobs to catch up. Only one Kraken2 process is allowed at a
-# time, and each sample's input FASTQ.GZ/FASTQ files are removed after that
-# sample finishes so PRISM result files are retained.
+# queue are independent: downloading keeps moving through the manifest with a
+# bounded number of concurrent sample downloads and does not wait for compute
+# jobs to catch up. Only one Kraken2 process is allowed at a time, and each
+# sample's input FASTQ.GZ/FASTQ files are removed after that sample finishes so
+# PRISM result files are retained.
 #
 # Baidu manifest format:
 #   one Baidu Netdisk sample path or FASTQ.GZ path per line; blank lines and
@@ -36,6 +37,9 @@
 #                             then PATH lookup.
 #   BAIDUPCS_DOWNLOAD_OPTS    Extra BaiduPCS-Go download options. Default: --ow.
 #                             Example: '-p 8 --retry 5'
+#   MAX_DOWNLOAD_JOBS         Maximum sample downloads alive at once. Default: 2.
+#   PARALLEL_MATES            Download R1 and R2 for one sample concurrently.
+#                             Default: TRUE.
 #   RAW_DIR                   Local staging directory for downloaded FASTQ.GZ files.
 #   FASTQ_DIR                 Local FASTQ/output directory.
 #   FQ1_END                   Read 1 suffix before .gz. Default: _RNAseq_R1.fastq
@@ -118,6 +122,8 @@ FASTQ_DIR="${FASTQ_DIR:-${PROJECT_ROOT}/02fastq}"
 FQ1_END="${FQ1_END:-_RNAseq_R1.fastq}"
 FQ2_END="${FQ2_END:-_RNAseq_R2.fastq}"
 BAIDUPCS_DOWNLOAD_OPTS="${BAIDUPCS_DOWNLOAD_OPTS:---ow}"
+MAX_DOWNLOAD_JOBS="${MAX_DOWNLOAD_JOBS:-2}"
+PARALLEL_MATES="${PARALLEL_MATES:-TRUE}"
 MAX_ACTIVE_JOBS="${MAX_ACTIVE_JOBS:-3}"
 KRAKEN2_QUEUE_DEPTH="${KRAKEN2_QUEUE_DEPTH:-2}"
 POLL_SECONDS="${POLL_SECONDS:-5}"
@@ -131,6 +137,11 @@ LOCKED_KRAKEN2_BIN="${WRAPPER_DIR}/kraken2_locked.sh"
 DOWNLOAD_LOG_DIR="${RUN_DIR}/downloads"
 DONE_DIR="${RUN_DIR}/download_done"
 FAIL_DIR="${RUN_DIR}/download_failed"
+
+if ! [[ "${MAX_DOWNLOAD_JOBS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "[ERROR] MAX_DOWNLOAD_JOBS must be a positive integer: ${MAX_DOWNLOAD_JOBS}"
+  exit 1
+fi
 
 mkdir -p "${RAW_DIR}" "${FASTQ_DIR}" "${RUN_DIR}" "${WRAPPER_DIR}" \
   "${KRAKEN2_EVENTS_DIR}" "${DOWNLOAD_LOG_DIR}" "${DONE_DIR}" "${FAIL_DIR}"
@@ -271,6 +282,14 @@ cleanup_partial_download() {
   delete_file_if_present "${RAW_DIR}/${sample}${FQ2_END}.gz"
 }
 
+download_one_file() {
+  local remote_file="$1"
+  local log_file="$2"
+
+  # shellcheck disable=SC2086
+  "${BAIDUPCS}" d ${BAIDUPCS_DOWNLOAD_OPTS} --saveto "${RAW_DIR}" "${remote_file}" >>"${log_file}" 2>&1
+}
+
 download_sample() {
   local idx="$1"
   local sample="${samples[$idx]}"
@@ -285,12 +304,19 @@ download_sample() {
   echo "[DOWNLOAD] ${sample}: ${remote_r1} + ${remote_r2} -> ${RAW_DIR}" | tee -a "${log_file}"
 
   set +e
-  # shellcheck disable=SC2086
-  "${BAIDUPCS}" d ${BAIDUPCS_DOWNLOAD_OPTS} --saveto "${RAW_DIR}" "${remote_r1}" >>"${log_file}" 2>&1
-  local status1=$?
-  # shellcheck disable=SC2086
-  "${BAIDUPCS}" d ${BAIDUPCS_DOWNLOAD_OPTS} --saveto "${RAW_DIR}" "${remote_r2}" >>"${log_file}" 2>&1
-  local status2=$?
+  local status1=0
+  local status2=0
+  if [[ "${PARALLEL_MATES}" == "TRUE" || "${PARALLEL_MATES}" == "true" || "${PARALLEL_MATES}" == "1" ]]; then
+    download_one_file "${remote_r1}" "${log_file}" &
+    local pid1="$!"
+    download_one_file "${remote_r2}" "${log_file}" &
+    local pid2="$!"
+    wait "${pid1}"; status1=$?
+    wait "${pid2}"; status2=$?
+  else
+    download_one_file "${remote_r1}" "${log_file}"; status1=$?
+    download_one_file "${remote_r2}" "${log_file}"; status2=$?
+  fi
   set -e
 
   if [[ "${status1}" -eq 0 && "${status2}" -eq 0 && -f "${local_r1}" && -f "${local_r2}" ]]; then
@@ -331,41 +357,44 @@ run_sample() {
   return "${status}"
 }
 
-download_pid=""
-download_idx=-1
 next_download=0
 next_run=0
 launched_runs=0
 completed_runs=0
 failures=0
 
+download_pids=()
+download_samples=()
 run_pids=()
 run_samples=()
 
 start_download_if_possible() {
-  if [[ -n "${download_pid}" ]]; then
-    return
-  fi
-  if [[ "${next_download}" -ge "${#samples[@]}" ]]; then
-    return
-  fi
-
-  download_idx="${next_download}"
-  download_sample "${download_idx}" &
-  download_pid="$!"
-  next_download=$((next_download + 1))
+  while [[ "${next_download}" -lt "${#samples[@]}" && "${#download_pids[@]}" -lt "${MAX_DOWNLOAD_JOBS}" ]]; do
+    local sample="${samples[$next_download]}"
+    download_sample "${next_download}" &
+    download_pids+=("$!")
+    download_samples+=("${sample}")
+    next_download=$((next_download + 1))
+  done
 }
 
-reap_download_if_done() {
-  if [[ -z "${download_pid}" ]]; then
-    return
-  fi
-  if is_running_pid "${download_pid}"; then
-    return
-  fi
-  wait "${download_pid}" || true
-  download_pid=""
-  download_idx=-1
+reap_finished_downloads() {
+  local new_pids=()
+  local new_samples=()
+  local idx
+  for idx in "${!download_pids[@]}"; do
+    local pid="${download_pids[$idx]}"
+    local sample="${download_samples[$idx]}"
+    if is_running_pid "${pid}"; then
+      new_pids+=("${pid}")
+      new_samples+=("${sample}")
+    else
+      wait "${pid}" || true
+      echo "[DOWNLOAD-FINISHED] ${sample}"
+    fi
+  done
+  download_pids=("${new_pids[@]}")
+  download_samples=("${new_samples[@]}")
 }
 
 launch_ready_runs() {
@@ -435,6 +464,8 @@ echo "[CHECK] RUN_SCRIPT: ${RUN_SCRIPT}"
 echo "[CHECK] RUN_DIR: ${RUN_DIR}"
 echo "[CHECK] BAIDUPCS: ${BAIDUPCS}"
 echo "[CHECK] BAIDUPCS_DOWNLOAD_OPTS: ${BAIDUPCS_DOWNLOAD_OPTS}"
+echo "[CHECK] MAX_DOWNLOAD_JOBS: ${MAX_DOWNLOAD_JOBS}"
+echo "[CHECK] PARALLEL_MATES: ${PARALLEL_MATES}"
 echo "[CHECK] RAW_DIR: ${RAW_DIR}"
 echo "[CHECK] FASTQ_DIR: ${FASTQ_DIR}"
 echo "[CHECK] MAX_ACTIVE_JOBS: ${MAX_ACTIVE_JOBS}"
@@ -444,11 +475,11 @@ echo "[CHECK] STAR_GENOME_LOAD: ${STAR_GENOME_LOAD:-LoadAndKeep}"
 echo "[CHECK] Sample count: ${#samples[@]}"
 
 while [[ "${completed_runs}" -lt "${#samples[@]}" ]]; do
-  reap_download_if_done
+  reap_finished_downloads
   reap_finished_runs
   launch_ready_runs
   start_download_if_possible
-  reap_download_if_done
+  reap_finished_downloads
   launch_ready_runs
 
   if [[ "${completed_runs}" -lt "${#samples[@]}" ]]; then
@@ -456,9 +487,7 @@ while [[ "${completed_runs}" -lt "${#samples[@]}" ]]; do
   fi
 done
 
-if [[ -n "${download_pid}" ]]; then
-  wait "${download_pid}" || true
-fi
+reap_finished_downloads
 
 if [[ "${failures}" -gt 0 ]]; then
   echo "[ERROR] ${failures} download/run task(s) failed."

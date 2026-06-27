@@ -1083,7 +1083,9 @@ ${BAIDUPCS} ls "/RNAseq"
 export PROJECT_ROOT=/your/path/to/PRISM
 
 export BAIDUPCS=/path/to/BaiduPCS-Go
-export BAIDUPCS_DOWNLOAD_OPTS="--ow -p 8"
+export BAIDUPCS_DOWNLOAD_OPTS="--ow -p 6"
+export MAX_DOWNLOAD_JOBS=6
+export PARALLEL_MATES=TRUE
 
 export USE_CUSTOM_DB=FALSE
 export KRAKEN2_EXTRA_OPTS=""
@@ -1097,7 +1099,9 @@ export KRAKEN2_QUEUE_DEPTH=2
 BaiduPCS-Go 相关参数含义：
 
 - `BAIDUPCS`：`BaiduPCS-Go` 可执行文件路径；如果不设置，脚本会优先查找脚本同目录下的 `BaiduPCS-Go`，然后查找 PATH。
-- `BAIDUPCS_DOWNLOAD_OPTS`：传给 `BaiduPCS-Go d` 的下载参数；默认是 `--ow`，表示覆盖已有同名文件。可以按网络情况追加并发、重试等参数，例如 `--ow -p 8`。
+- `BAIDUPCS_DOWNLOAD_OPTS`：传给单个 `BaiduPCS-Go d` 的下载参数；默认是 `--ow`，表示覆盖已有同名文件。可以按网络情况追加 BaiduPCS-Go 单任务内部并发、重试等参数，例如 `--ow -p 6`。
+- `MAX_DOWNLOAD_JOBS`：脚本层面允许多少个样本下载任务同时存在；例如 `6` 表示最多同时下载 6 个样本。
+- `PARALLEL_MATES=TRUE`：同一个样本的 R1 和 R2 两个文件同时下载；如果百度网盘限速或网络压力较大，可以改成 `FALSE`。
 
 计算相关参数含义：
 
