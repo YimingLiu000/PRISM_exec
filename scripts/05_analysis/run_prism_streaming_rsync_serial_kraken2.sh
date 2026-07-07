@@ -15,17 +15,21 @@
 #      files. Result directories are retained.
 #
 # Remote manifest format:
-#   one remote sample directory or FASTQ.GZ path per line; blank lines and lines
-#   starting with # are ignored.
+#   one remote sample path or FASTQ.GZ path per line; blank lines and lines
+#   starting with # are ignored. FASTQ.GZ paths are synced exactly as listed; if
+#   only one mate is listed, the other mate is inferred from the same directory
+#   and the default read suffix. Non-GZ paths are treated as <parent>/<sample>,
+#   and FASTQ.GZ files are inferred directly under <parent>.
 #
 # Example remote manifest:
 #   /data/rnaseq/FUSCCTNBC001
 #   /data/rnaseq/FUSCCTNBC002
 # or:
-#   /data/rnaseq/FUSCCTNBC001/FUSCCTNBC001_RNAseq_R1.fastq.gz
-#   /data/rnaseq/FUSCCTNBC002/FUSCCTNBC002_RNAseq_R1.fastq.gz
+#   /data/rnaseq/FUSCCTNBC001_RNAseq_R1.fastq.gz
+#   /data/rnaseq/FUSCCTNBC002_RNAseq_R1.fastq.gz
 #
-# By default each remote directory must contain:
+# In both forms, all FASTQ.GZ files are expected to be flat in the parent
+# directory:
 #   <sample>_RNAseq_R1.fastq.gz
 #   <sample>_RNAseq_R2.fastq.gz
 #
@@ -170,8 +174,9 @@ exit "${status}"
 EOF
 chmod +x "${LOCKED_KRAKEN2_BIN}"
 
-remote_dirs=()
 samples=()
+remote_r1s=()
+remote_r2s=()
 seen_samples=" "
 while IFS= read -r remote_path || [[ -n "${remote_path}" ]]; do
   remote_path="${remote_path#"${remote_path%%[![:space:]]*}"}"
@@ -180,17 +185,30 @@ while IFS= read -r remote_path || [[ -n "${remote_path}" ]]; do
   [[ "${remote_path}" == \#* ]] && continue
 
   sample=""
-  remote_dir=""
+  remote_parent=""
+  remote_r1=""
+  remote_r2=""
   base_name="$(basename "${remote_path}")"
   if [[ "${base_name}" == *"${FQ1_END}.gz" ]]; then
     sample="${base_name%"${FQ1_END}.gz"}"
-    remote_dir="$(dirname "${remote_path}")"
+    remote_r1="${remote_path}"
+    remote_parent="$(dirname "${remote_path}")"
+    remote_r2="${remote_parent}/${sample}${FQ2_END}.gz"
   elif [[ "${base_name}" == *"${FQ2_END}.gz" ]]; then
     sample="${base_name%"${FQ2_END}.gz"}"
-    remote_dir="$(dirname "${remote_path}")"
+    remote_r2="${remote_path}"
+    remote_parent="$(dirname "${remote_path}")"
+    remote_r1="${remote_parent}/${sample}${FQ1_END}.gz"
   else
-    remote_dir="${remote_path%/}"
-    sample="$(basename "${remote_dir}")"
+    if [[ "${remote_path}" != */* ]]; then
+      echo "[ERROR] Sample entry must include its remote parent directory: ${remote_path}"
+      echo "        Use /path/to/parent/${remote_path}, or provide a full FASTQ.GZ path."
+      exit 1
+    fi
+    sample="${base_name}"
+    remote_parent="$(dirname "${remote_path}")"
+    remote_r1="${remote_parent}/${sample}${FQ1_END}.gz"
+    remote_r2="${remote_parent}/${sample}${FQ2_END}.gz"
   fi
 
   if [[ -z "${sample}" || "${sample}" == "." || "${sample}" == "/" ]]; then
@@ -199,11 +217,22 @@ while IFS= read -r remote_path || [[ -n "${remote_path}" ]]; do
   fi
 
   if [[ "${seen_samples}" == *" ${sample} "* ]]; then
+    for idx in "${!samples[@]}"; do
+      if [[ "${samples[$idx]}" == "${sample}" ]]; then
+        if [[ "${base_name}" == *"${FQ1_END}.gz" ]]; then
+          remote_r1s[$idx]="${remote_path}"
+        elif [[ "${base_name}" == *"${FQ2_END}.gz" ]]; then
+          remote_r2s[$idx]="${remote_path}"
+        fi
+        break
+      fi
+    done
     continue
   fi
   seen_samples="${seen_samples}${sample} "
-  remote_dirs+=("${remote_dir%/}")
   samples+=("${sample}")
+  remote_r1s+=("${remote_r1}")
+  remote_r2s+=("${remote_r2}")
 done < "${REMOTE_MANIFEST}"
 
 if [[ "${#samples[@]}" -eq 0 ]]; then
@@ -253,18 +282,17 @@ cleanup_partial_download() {
 download_sample() {
   local idx="$1"
   local sample="${samples[$idx]}"
-  local remote_dir="${remote_dirs[$idx]}"
   local safe_sample
   safe_sample="$(safe_name "${sample}")"
   local log_file="${DOWNLOAD_LOG_DIR}/${safe_sample}.rsync.log"
-  local remote_r1="${RSYNC_REMOTE}:${remote_dir}/${sample}${FQ1_END}.gz"
-  local remote_r2="${RSYNC_REMOTE}:${remote_dir}/${sample}${FQ2_END}.gz"
+  local remote_r1="${RSYNC_REMOTE}:${remote_r1s[$idx]}"
+  local remote_r2="${RSYNC_REMOTE}:${remote_r2s[$idx]}"
   local local_r1="${RAW_DIR}/${sample}${FQ1_END}.gz"
   local local_r2="${RAW_DIR}/${sample}${FQ2_END}.gz"
   local status1=0
   local status2=0
 
-  echo "[DOWNLOAD] ${sample}: ${remote_dir} -> ${RAW_DIR}" | tee -a "${log_file}"
+  echo "[DOWNLOAD] ${sample}: ${remote_r1} + ${remote_r2} -> ${RAW_DIR}" | tee -a "${log_file}"
 
   set +e
   if [[ "${PARALLEL_MATES}" == "TRUE" || "${PARALLEL_MATES}" == "true" || "${PARALLEL_MATES}" == "1" ]]; then
@@ -285,7 +313,7 @@ download_sample() {
     echo "[DOWNLOAD-READY] ${sample}" | tee -a "${log_file}"
   else
     touch "${FAIL_DIR}/${safe_sample}.failed"
-    echo "[DOWNLOAD-ERROR] ${sample}; check ${log_file}" | tee -a "${log_file}"
+    echo "[DOWNLOAD-ERROR] ${sample}; status R1=${status1}, R2=${status2}; expected ${local_r1} and ${local_r2}; check ${log_file}" | tee -a "${log_file}"
     cleanup_partial_download "${sample}"
   fi
 }
@@ -328,6 +356,8 @@ run_sample() {
     export PROJECT_ROOT="${PROJECT_ROOT}"
     export RAW_DIR="${RAW_DIR}"
     export FASTQ_DIR="${FASTQ_DIR}"
+    export FQ1_END="${FQ1_END}"
+    export FQ2_END="${FQ2_END}"
     export SAMPLE="${sample}"
     export KRAKEN2_BIN="${LOCKED_KRAKEN2_BIN}"
     export REAL_KRAKEN2_BIN="${REAL_KRAKEN2_BIN}"

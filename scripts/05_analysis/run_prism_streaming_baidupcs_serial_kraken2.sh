@@ -341,6 +341,8 @@ run_sample() {
     export PROJECT_ROOT="${PROJECT_ROOT}"
     export RAW_DIR="${RAW_DIR}"
     export FASTQ_DIR="${FASTQ_DIR}"
+    export FQ1_END="${FQ1_END}"
+    export FQ2_END="${FQ2_END}"
     export SAMPLE="${sample}"
     export KRAKEN2_BIN="${LOCKED_KRAKEN2_BIN}"
     export REAL_KRAKEN2_BIN="${REAL_KRAKEN2_BIN}"

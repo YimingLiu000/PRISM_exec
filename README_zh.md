@@ -106,9 +106,9 @@ PRISM 分析与真菌结果提取。
 - `run_prism_samples_parallel_with_serial_kraken2.sh`
   作用：读取样本列表，启动多个可重叠的 PRISM 样本任务，但通过全局 `flock` 锁保证同一时间只有一个样本执行 Kraken2；适合 `KRAKEN2_EXTRA_OPTS=""`、Kraken2 数据库完整加载到内存且服务器内存只能容纳一个 Kraken2 数据库的场景
 - `run_prism_streaming_rsync_serial_kraken2.sh`
-  作用：使用 `rsync` 从远程数据服务器按清单顺序流式同步样本；下载队列和计算队列相互独立，样本下载完成后进入 PRISM 计算队列，Kraken2 仍通过全局 `flock` 串行执行，单样本完成后删除该样本的 `.fastq.gz` 和解压后的 `.fastq` 输入文件，仅保留 PRISM 结果。
+  作用：使用 `rsync` 从远程数据服务器按清单顺序流式同步样本；清单可写 `<parent>/<sample>` 或具体 `.fastq.gz` 路径，脚本按父目录下平铺的 `<sample>_RNAseq_R1/2.fastq.gz` 推断双端文件；下载队列和计算队列相互独立，样本下载完成后进入 PRISM 计算队列，Kraken2 仍通过全局 `flock` 串行执行，单样本完成后删除该样本的 `.fastq.gz` 和解压后的 `.fastq` 输入文件，仅保留 PRISM 结果。
 - `run_prism_streaming_baidupcs_serial_kraken2.sh`
-  作用：使用 `BaiduPCS-Go` 从百度网盘按清单顺序流式下载样本；下载队列不等待计算队列，已下载样本进入 PRISM 计算队列，Kraken2 全局串行执行，单样本完成后清理该样本输入文件，仅保留结果。
+  作用：使用 `BaiduPCS-Go` 从百度网盘按并发上限流式下载样本；清单可写 `<parent>/<sample>` 或具体 `.fastq.gz` 路径，脚本按父目录下平铺的 `<sample>_RNAseq_R1/2.fastq.gz` 推断双端文件；下载队列不等待计算队列，已下载样本进入 PRISM 计算队列，Kraken2 全局串行执行，单样本完成后清理该样本输入文件，仅保留结果。
 - `extract_fungal_abundance.R`
   作用：从 PRISM 最终结果中提取真菌 read、物种汇总和最终 FASTA
 
@@ -769,7 +769,7 @@ ${PROJECT_ROOT}/00script/05_analysis/run_prism_streaming_rsync_serial_kraken2.sh
 这个脚本的调度逻辑是：
 
 1. 下载队列和计算队列相互独立。
-2. 下载队列按清单顺序持续下载样本，不等待计算完成。
+2. 下载队列按清单顺序逐个样本持续下载，不等待计算完成；同一样本的 R1/R2 可通过 `PARALLEL_MATES=TRUE` 同时下载。
 3. 一个样本的 R1/R2 两个 `.fastq.gz` 都同步完成后，该样本立即进入计算队列。
 4. 如果下载速度慢、计算追上下载进度，计算队列会自动等待下一个样本下载完成。
 5. Kraken2 仍然通过全局 `flock` 锁串行执行，同一时间只有一个样本运行 Kraken2。
@@ -777,9 +777,9 @@ ${PROJECT_ROOT}/00script/05_analysis/run_prism_streaming_rsync_serial_kraken2.sh
 
 #### 7.6.1 准备远程样本路径清单
 
-清单文件每行写一个远程样本目录，或者写一个远程 FASTQ.GZ 文件路径。空行和以 `#` 开头的注释行会被忽略。
+清单文件每行写一个远程样本路径，或者写一个远程 FASTQ.GZ 文件路径。空行和以 `#` 开头的注释行会被忽略。
 
-推荐写远程样本目录：
+推荐写远程样本路径，格式是 `<父目录>/<样本名>`：
 
 ```bash
 cat > remote_sample_dirs.txt <<EOF
@@ -789,7 +789,7 @@ cat > remote_sample_dirs.txt <<EOF
 EOF
 ```
 
-默认情况下，每个远程样本目录中需要有：
+脚本会把最后一段识别为样本名，把前面的部分识别为父目录，并在父目录下寻找平铺的双端 FASTQ：
 
 ```bash
 <sample>_RNAseq_R1.fastq.gz
@@ -799,20 +799,22 @@ EOF
 例如样本名为 `FUSCCTNBC006.rep` 时，脚本会寻找：
 
 ```bash
-/data/rnaseq/FUSCCTNBC006.rep/FUSCCTNBC006.rep_RNAseq_R1.fastq.gz
-/data/rnaseq/FUSCCTNBC006.rep/FUSCCTNBC006.rep_RNAseq_R2.fastq.gz
+/data/rnaseq/FUSCCTNBC006.rep_RNAseq_R1.fastq.gz
+/data/rnaseq/FUSCCTNBC006.rep_RNAseq_R2.fastq.gz
 ```
 
-因此样本名中包含点号 `.` 不影响识别；关键是远程目录名和 FASTQ 文件名前缀要一致。
+因此样本名中包含点号 `.` 不影响识别；关键是清单中的最后一段样本名和 FASTQ 文件名前缀要一致。裸样本名如 `FUSCCTNBC001` 不包含父目录，脚本会报错；请写成 `/data/rnaseq/FUSCCTNBC001` 或具体 FASTQ 路径。
 
-如果你的清单写的是 FASTQ 文件路径，也可以只写 R1 或 R2 中任意一个，脚本会自动取其所在目录并推断样本名：
+如果你的清单写的是 FASTQ 文件路径，也可以只写 R1 或 R2 中任意一个，脚本会原样使用该路径，并用同一父目录推断另一个 mate：
 
 ```bash
 cat > remote_sample_dirs.txt <<EOF
-/data/rnaseq/FUSCCTNBC001/FUSCCTNBC001_RNAseq_R1.fastq.gz
-/data/rnaseq/FUSCCTNBC002/FUSCCTNBC002_RNAseq_R1.fastq.gz
+/data/rnaseq/FUSCCTNBC001_RNAseq_R1.fastq.gz
+/data/rnaseq/FUSCCTNBC002_RNAseq_R1.fastq.gz
 EOF
 ```
+
+如果同一个样本的 R1 和 R2 都写在清单中，脚本会把它们合并为一个样本任务，不会重复计算。
 
 如果 FASTQ 后缀不是默认的 `_RNAseq_R1.fastq.gz` 和 `_RNAseq_R2.fastq.gz`，运行前统一设置：
 
@@ -999,7 +1001,7 @@ ${PROJECT_ROOT}/00script/05_analysis/run_prism_streaming_baidupcs_serial_kraken2
 这个脚本的调度逻辑是：
 
 1. 下载队列和计算队列是分开的两个队列。
-2. 下载队列按清单顺序持续调用 `BaiduPCS-Go` 下载样本，不等待计算队列完成。
+2. 下载队列按 `MAX_DOWNLOAD_JOBS` 控制样本下载并发，不等待计算队列完成；同一样本的 R1/R2 可通过 `PARALLEL_MATES=TRUE` 同时下载。
 3. 一个样本的 R1/R2 两个 `.fastq.gz` 都下载完成后，该样本立即进入 PRISM 计算队列。
 4. 如果下载速度慢、计算进度追上下载进度，计算队列会暂停等待，直到下一个样本下载完成后再启动新的计算。
 5. Kraken2 仍然通过全局 `flock` 锁串行执行，同一时间只有一个样本运行 Kraken2。
@@ -1007,9 +1009,9 @@ ${PROJECT_ROOT}/00script/05_analysis/run_prism_streaming_baidupcs_serial_kraken2
 
 #### 7.7.1 准备百度网盘样本路径清单
 
-清单文件每行写一个百度网盘样本目录，或者写一个百度网盘 FASTQ.GZ 文件路径。空行和以 `#` 开头的注释行会被忽略。
+清单文件每行写一个百度网盘样本路径，或者写一个百度网盘 FASTQ.GZ 文件路径。空行和以 `#` 开头的注释行会被忽略。
 
-推荐写样本目录：
+推荐写样本路径，格式是 `<父目录>/<样本名>`：
 
 ```bash
 cat > baidu_sample_paths.txt <<EOF
@@ -1019,7 +1021,7 @@ cat > baidu_sample_paths.txt <<EOF
 EOF
 ```
 
-默认情况下，每个样本目录中需要有：
+脚本会把最后一段识别为样本名，把前面的部分识别为父目录，并在父目录下寻找平铺的双端 FASTQ：
 
 ```bash
 <sample>_RNAseq_R1.fastq.gz
@@ -1029,18 +1031,22 @@ EOF
 例如样本名为 `FUSCCTNBC001` 时，脚本会下载：
 
 ```bash
-/RNAseq/FUSCCTNBC001/FUSCCTNBC001_RNAseq_R1.fastq.gz
-/RNAseq/FUSCCTNBC001/FUSCCTNBC001_RNAseq_R2.fastq.gz
+/RNAseq/FUSCCTNBC001_RNAseq_R1.fastq.gz
+/RNAseq/FUSCCTNBC001_RNAseq_R2.fastq.gz
 ```
 
-也可以只在清单中写 R1 或 R2 中任意一个 FASTQ.GZ 文件路径，脚本会自动取其所在目录并推断样本名：
+裸样本名如 `FUSCCTNBC001` 不包含父目录，脚本会报错；请写成 `/RNAseq/FUSCCTNBC001` 或具体 FASTQ 路径。
+
+也可以只在清单中写 R1 或 R2 中任意一个 FASTQ.GZ 文件路径，脚本会原样使用该路径，并用同一父目录推断另一个 mate：
 
 ```bash
 cat > baidu_sample_paths.txt <<EOF
-/RNAseq/FUSCCTNBC001/FUSCCTNBC001_RNAseq_R1.fastq.gz
-/RNAseq/FUSCCTNBC002/FUSCCTNBC002_RNAseq_R1.fastq.gz
+/RNAseq/FUSCCTNBC001_RNAseq_R1.fastq.gz
+/RNAseq/FUSCCTNBC002_RNAseq_R1.fastq.gz
 EOF
 ```
+
+如果同一个样本的 R1 和 R2 都写在清单中，脚本会把它们合并为一个样本任务，不会重复计算。
 
 如果 FASTQ 后缀不是默认的 `_RNAseq_R1.fastq.gz` 和 `_RNAseq_R2.fastq.gz`，运行前统一设置：
 
