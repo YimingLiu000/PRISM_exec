@@ -45,7 +45,9 @@
 #   RAW_DIR             Local staging directory for downloaded FASTQ.GZ files.
 #   FASTQ_DIR           Local FASTQ/output directory.
 #   FQ1_END             Read 1 suffix before .gz. Default: _RNAseq_R1.fastq
+#                       A full .gz suffix such as _1.fq.gz is also accepted.
 #   FQ2_END             Read 2 suffix before .gz. Default: _RNAseq_R2.fastq
+#                       A full .gz suffix such as _2.fq.gz is also accepted.
 #   RSYNC_SSH_PORT      SSH port. Default: 22.
 #   RSYNC_SSH_OPTS      Extra SSH options. Default: empty.
 #   RSYNC_OPTS          Extra rsync options. Default: -av --partial --append-verify
@@ -117,6 +119,12 @@ RAW_DIR="${RAW_DIR:-${PROJECT_ROOT}/01rawdata}"
 FASTQ_DIR="${FASTQ_DIR:-${PROJECT_ROOT}/02fastq}"
 FQ1_END="${FQ1_END:-_RNAseq_R1.fastq}"
 FQ2_END="${FQ2_END:-_RNAseq_R2.fastq}"
+if [[ "${FQ1_END}" == *.gz ]]; then
+  FQ1_END="${FQ1_END%.gz}"
+fi
+if [[ "${FQ2_END}" == *.gz ]]; then
+  FQ2_END="${FQ2_END%.gz}"
+fi
 RSYNC_OPTS="${RSYNC_OPTS:--av --partial --append-verify}"
 RSYNC_SSH_PORT="${RSYNC_SSH_PORT:-22}"
 RSYNC_SSH_OPTS="${RSYNC_SSH_OPTS:-}"
@@ -472,6 +480,8 @@ echo "[CHECK] RSYNC_OPTS: ${RSYNC_OPTS}"
 echo "[CHECK] PARALLEL_MATES: ${PARALLEL_MATES}"
 echo "[CHECK] RAW_DIR: ${RAW_DIR}"
 echo "[CHECK] FASTQ_DIR: ${FASTQ_DIR}"
+echo "[CHECK] FQ1_END: ${FQ1_END}"
+echo "[CHECK] FQ2_END: ${FQ2_END}"
 echo "[CHECK] MAX_ACTIVE_JOBS: ${MAX_ACTIVE_JOBS}"
 echo "[CHECK] KRAKEN2_QUEUE_DEPTH: ${KRAKEN2_QUEUE_DEPTH}"
 echo "[CHECK] KRAKEN2_EXTRA_OPTS: ${KRAKEN2_EXTRA_OPTS-}"
